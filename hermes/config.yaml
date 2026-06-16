@@ -1,0 +1,86 @@
+# Agent Home — Hermes engine config (TEMPLATE)
+# ---------------------------------------------------------------------------
+# This is a STARTING TEMPLATE. Exact key names may differ by Hermes version
+# (the research notes fast naming drift). After `hermes` is installed, verify
+# every key against:  hermes config --help   and   ~/.hermes/config.yaml
+# Copy the verified result to ~/.hermes/config.yaml (NOT committed with secrets).
+# Secrets live in ~/.hermes/.env (see .env.example) — never inline here.
+# ---------------------------------------------------------------------------
+
+# --- Gateway / dispatcher -----------------------------------------------------
+gateway:
+  host: 127.0.0.1          # NEVER 0.0.0.0 without TLS + auth
+  port: 8642
+
+kanban:
+  dispatch_in_gateway: true
+  tick_seconds: 60
+
+# --- Goal Mode ----------------------------------------------------------------
+goals:
+  max_turns: 20
+  judge_model: gemini-flash   # cheap judge (Tier C Flash) — ~80% cost cut
+
+# --- Delegation ("Hive") ------------------------------------------------------
+delegation:
+  max_concurrent_children: 8
+  max_spawn_depth: 2
+
+# --- Provider mesh (free-first, four tiers) -----------------------------------
+# Tier A = local (free, private) · Tier B = free cloud (logged, transient)
+# Tier C = Gemini (API) · Tier D = Claude Code CLI (runtime, not a model here)
+providers:
+  # Tier A — local, no key, private. Default for bulk + sensitive data.
+  ollama:
+    type: openai_compatible
+    base_url: http://127.0.0.1:11434/v1
+    models: [gemma-4-12b, nemotron-via-ollama]
+
+  # Tier B — free cloud. NON-SENSITIVE ONLY (these log prompts, are transient).
+  openrouter_free:
+    type: openai_compatible
+    base_url: https://openrouter.ai/api/v1
+    api_key_env: OPENROUTER_API_KEY
+    models: [nvidia/nemotron-3-ultra:free]   # verify current free IDs
+    privacy: logged                          # routing guard reads this
+  glm_flash:
+    type: anthropic_compatible
+    base_url: https://api.z.ai/api/anthropic
+    api_key_env: ZAI_API_KEY
+    models: [glm-4-flash]
+    privacy: logged
+
+  # Tier C — Gemini. Flash = judge/high-freq; Pro = heavy; Prompt Foundry.
+  gemini:
+    type: openai_compatible
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+    api_key_env: GEMINI_API_KEY
+    models: [gemini-flash, gemini-pro]        # verify current IDs in ai.google.dev
+
+  # Tier D (Claude) is a RUNTIME, not a provider model — see scripts/ + the
+  # Claude Code MCP wiring. Hermes reaches it via terminal/CLI delegation.
+
+# --- Routing policy -----------------------------------------------------------
+# free-first, judge-gated. Sensitive work NEVER touches `privacy: logged`.
+routing:
+  order: [ollama, openrouter_free, glm_flash, gemini, claude_code]
+  escalate_on: judge_fail
+  sensitive_allow: [ollama, gemini, claude_code]   # privacy guard allowlist
+
+# --- Shared memory (Obsidian) -------------------------------------------------
+mcp_servers:
+  obsidian:
+    # Obsidian Local REST API plugin on :27123, exposed via an Obsidian MCP server.
+    # API key stored as MCP_OBSIDIAN_API_KEY in ~/.hermes/.env (Bearer stripped).
+    base_url: http://127.0.0.1:27123
+    api_key_env: MCP_OBSIDIAN_API_KEY
+    vault_scope: "10_Projects/agent-home"   # agents never roam the whole vault
+
+# --- Profiles (= our agents). Personas live in ./profiles/*.md ----------------
+profiles:
+  researcher: { provider: gemini,   model: gemini-pro,   persona: profiles/researcher.md }
+  writer:     { provider: gemini,   model: gemini-pro,   persona: profiles/writer.md }
+  seo:        { provider: gemini,   model: gemini-flash, persona: profiles/seo.md }
+  judge:      { provider: gemini,   model: gemini-flash, persona: profiles/judge.md }
+  prompt-writer: { provider: gemini, model: gemini-pro,  persona: profiles/prompt-writer.md, skill: prompt-foundry }
+  prompt-judge:  { provider: gemini, model: gemini-flash, persona: profiles/judge.md }

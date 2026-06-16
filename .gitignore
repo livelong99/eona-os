@@ -1,0 +1,32 @@
+# Secrets — never commit
+.env
+.env.local
+*.local
+hermes/.env
+
+# Agent tooling / generated state (regenerable)
+.claude/
+.agent/
+_bmad/
+_bmad-output/
+.claude-flow/
+.swarm/
+ruvector.db
+memory.db
+*.db-wal
+*.db-shm
+
+# Dependencies & build artifacts
+node_modules/
+.next/
+dist/
+build/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+*.log
+Thumbs.db
