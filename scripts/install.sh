@@ -42,13 +42,27 @@ if grep -q "CHANGE_ME" "${SEARX}" 2>/dev/null; then
   say "Generated SearXNG secret_key."
 fi
 
-# 4) Obsidian reminder ---------------------------------------------------------
+# 4) Claude bridge token -------------------------------------------------------
+if ! grep -q '^CLAUDE_BRIDGE_TOKEN=.\+' "${ENV_FILE}"; then
+  tok="$(openssl rand -hex 16)"
+  /usr/bin/sed -i '' "s/^CLAUDE_BRIDGE_TOKEN=.*/CLAUDE_BRIDGE_TOKEN=${tok}/" "${ENV_FILE}" 2>/dev/null \
+    || sed -i "s/^CLAUDE_BRIDGE_TOKEN=.*/CLAUDE_BRIDGE_TOKEN=${tok}/" "${ENV_FILE}"
+  say "Generated CLAUDE_BRIDGE_TOKEN."
+fi
+
+# 5) Obsidian reminder ---------------------------------------------------------
 say "Ensure Obsidian is running with the Local REST API plugin (host :27123)."
 say "Containers reach it via host.docker.internal."
 
-# 5) Bring up the stack --------------------------------------------------------
+# 6) Bring up the stack --------------------------------------------------------
 say "Building + starting the stack (hermes, searxng, crawl4ai, qdrant, dashboard)…"
 docker compose -f "${REPO_DIR}/docker-compose.yml" up -d --build
 
 say "Done. Dashboard → http://127.0.0.1:3737 · Gateway → http://127.0.0.1:8642"
 say "Verify with: scripts/doctor.sh   ·   Logs: docker compose logs -f hermes"
+echo
+say "To enable Claude Code delegation, start the host bridge (separate terminal):"
+echo "    set -a; . ${ENV_FILE}; set +a"
+echo "    BRIDGE_TOKEN=\$CLAUDE_BRIDGE_TOKEN BRIDGE_HOST=0.0.0.0 python3 ${REPO_DIR}/scripts/claude-bridge.py"
+say "Optional: index the vault for semantic recall:"
+echo "    set -a; . ${ENV_FILE}; set +a; python3 ${REPO_DIR}/scripts/index-vault.py"

@@ -1,85 +1,67 @@
-# Agent Home — Hermes engine config (TEMPLATE)
-# ---------------------------------------------------------------------------
-# This is a STARTING TEMPLATE. Exact key names may differ by Hermes version
-# (the research notes fast naming drift). After `hermes` is installed, verify
-# every key against:  hermes config --help   and   ~/.hermes/config.yaml
-# Copy the verified result to ~/.hermes/config.yaml (NOT committed with secrets).
-# Secrets live in ~/.hermes/.env (see .env.example) — never inline here.
-# ---------------------------------------------------------------------------
+# Agent Home — Hermes config (~/.hermes/config.yaml). Real schema per
+# github.com/NousResearch/hermes-agent (cli-config.yaml.example + docs).
+# Secrets live in hermes/.env (see .env.example) — never inline here.
+# After install, reconcile against:  hermes config schema  /  /api/config/schema.
 
-# --- Gateway / dispatcher -----------------------------------------------------
-gateway:
-  host: 127.0.0.1          # NEVER 0.0.0.0 without TLS + auth
-  port: 8642
+# --- Model / provider ---------------------------------------------------------
+# Primary brain = Gemini via the OpenAI-compatible endpoint. If `hermes model`
+# offers Gemini natively, prefer that + GEMINI_API_KEY; otherwise this custom
+# OpenAI-compat path reads OPENAI_API_KEY (set it to your Gemini key in .env).
+model:
+  provider: custom
+  base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
+  default: "gemini-flash" # cheap default; escalate to gemini-pro per task. Verify IDs.
+  context_length: 1000000
+  max_tokens: 8192
 
-kanban:
-  dispatch_in_gateway: true
-  tick_seconds: 60
+# For a free local tier, create a separate profile instead of editing this:
+#   hermes profile create local --clone
+#   (then set model.provider=custom, base_url=http://host.docker.internal:11434/v1)
 
-# --- Goal Mode ----------------------------------------------------------------
-goals:
-  max_turns: 20
-  judge_model: gemini-flash   # cheap judge (Tier C Flash) — ~80% cost cut
+# --- Agent behavior -----------------------------------------------------------
+agent:
+  max_turns: 60
+  reasoning_effort: medium
 
 # --- Delegation ("Hive") ------------------------------------------------------
 delegation:
+  max_iterations: 8
   max_concurrent_children: 8
-  max_spawn_depth: 2
 
-# --- Provider mesh (three tiers; only paid = Claude sub + Gemini key) ---------
-# Tier A = Ollama (native, free, optional) · Tier C = Gemini (API)
-# Tier D = Claude Code CLI (runtime, not a model here)
-# Hostnames assume the Docker stack: host.docker.internal reaches host-native
-# services (Ollama, Obsidian). When running Hermes natively, use 127.0.0.1.
-providers:
-  # Tier A — local, no key, private. Optional (run Ollama native for Metal GPU).
-  ollama:
-    type: openai_compatible
-    base_url: http://host.docker.internal:11434/v1
-    models: [gemma3, llama3.1]   # verify tags you've pulled: `ollama list`
+# --- Memory -------------------------------------------------------------------
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+  memory_char_limit: 1300
 
-  # Tier C — Gemini. Flash = judge/high-freq; Pro = heavy; Prompt Foundry.
-  gemini:
-    type: openai_compatible
-    base_url: https://generativelanguage.googleapis.com/v1beta/openai
-    api_key_env: GEMINI_API_KEY
-    models: [gemini-flash, gemini-pro]        # verify current IDs in ai.google.dev
+# --- Execution environment ----------------------------------------------------
+terminal:
+  backend: local # inside the Hermes container
 
-  # Tier D (Claude) is a RUNTIME, not a provider model — Hermes reaches it via
-  # terminal/CLI delegation; it shares memory through the Obsidian MCP.
+# --- Security -----------------------------------------------------------------
+security:
+  tirith_enabled: true # pre-exec command scanning
 
-# --- Routing policy -----------------------------------------------------------
-# cheap-first, judge-gated. No external promo/free-cloud models (dropped).
-routing:
-  order: [ollama, gemini, claude_code]   # ollama optional; falls through if absent
-  escalate_on: judge_fail
+# --- API server (OpenAI-compatible; the dashboard talks to this) --------------
+# Host is set via API_SERVER_HOST env (0.0.0.0 in-container; host exposure is the
+# compose 127.0.0.1 publish). Port 8642.
+platforms:
+  api_server:
+    enabled: true
+    port: 8642
 
-# --- Shared memory (Obsidian) + OSS tools (self-hosted Docker) -----------------
+# --- MCP servers: shared memory + tools (verify shape vs `hermes` MCP docs) ----
 mcp_servers:
-  obsidian:
-    # Obsidian Local REST API plugin on the HOST (:27123).
-    # API key stored as MCP_OBSIDIAN_API_KEY in ~/.hermes/.env (Bearer stripped).
-    base_url: http://host.docker.internal:27123
-    api_key_env: MCP_OBSIDIAN_API_KEY
-    vault_scope: "10_Projects/agent-home"   # agents never roam the whole vault
-  qdrant:
-    # Vector memory for semantic recall over the vault (Docker service).
-    base_url: http://qdrant:6333
+  obsidian: # shared brain — Obsidian Local REST API plugin on the host
+    command: npx
+    args: ["-y", "obsidian-mcp-server"]
+    env:
+      OBSIDIAN_API_KEY: "${MCP_OBSIDIAN_API_KEY}"
+      OBSIDIAN_BASE_URL: "http://host.docker.internal:27123"
+      OBSIDIAN_VERIFY_SSL: "false"
+  qdrant: # semantic memory (Docker service)
+    url: "http://qdrant:6333"
 
-# --- Tools (self-hosted OSS; no paid SaaS). Wire as search/scrape skills. ------
-tools:
-  search:
-    provider: searxng
-    base_url: http://searxng:8080      # JSON format enabled in infra/searxng/settings.yml
-  scrape:
-    provider: crawl4ai
-    base_url: http://crawl4ai:11235
-
-# --- Profiles (= our agents). Personas live in ./profiles/*.md ----------------
-profiles:
-  researcher: { provider: gemini,   model: gemini-pro,   persona: profiles/researcher.md }
-  writer:     { provider: gemini,   model: gemini-pro,   persona: profiles/writer.md }
-  seo:        { provider: gemini,   model: gemini-flash, persona: profiles/seo.md }
-  judge:      { provider: gemini,   model: gemini-flash, persona: profiles/judge.md }
-  prompt-writer: { provider: gemini, model: gemini-pro,  persona: profiles/prompt-writer.md, skill: prompt-foundry }
-  prompt-judge:  { provider: gemini, model: gemini-flash, persona: profiles/judge.md }
+# Search/scrape are skills (hermes/skills/web-search, web-scrape) that call the
+# SearXNG (:8080) and Crawl4AI (:11235) containers — not config blocks.
+# Personas in hermes/profiles/*.md map to each profile's SOUL.md (hermes profile create).

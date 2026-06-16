@@ -137,8 +137,11 @@ they were dropped (data-logging + transient).
   - **SELF:** Prompt Foundry, Memory (purple knowledge-"galaxy" graph), Goal Mode.
 - **Screen archetypes (3):** Chat (Claude/Gemini/Local), Board (Kanban), Graph (Memory). Prompt Foundry = a
   Chat variant with a structured prompt-output panel.
-- **Realtime:** subscribe to Hermes `task_events` over WebSocket. **Persistence:** local save of nav
-  customizations survives updates.
+- **API surface (verified against Hermes source):** the dashboard talks to the OpenAI-compatible **API
+  server on :8642** — `GET /health`, `POST /v1/chat/completions`, `POST /v1/runs` + **SSE**
+  `GET /v1/runs/{id}/events`. Kanban + memory-graph are **not** on :8642; they live in Hermes' own
+  **dashboard backend :9119** (`/api/sessions`, WS `/api/ws`, auth-gated) or the kanban CLI/DB — wired in a
+  later pass (today those views use mock data). **Persistence:** local save of nav customizations.
 
 ### E. Prompt Foundry — Studio v1 (content pillar)
 - Generates **maximally-detailed image & video prompts** for **Google Flow** (Veo/Imagen) instead of calling
@@ -156,6 +159,11 @@ No paid SaaS. Each is a free container wired into Hermes (and Claude Code) as an
 - **Crawl4AI** — self-hosted scrape/extract (`:11235`) for page→markdown, replacing paid crawlers.
 - **Qdrant** — vector DB (`:6333`) for semantic memory over the vault (see §4.B).
 - Any *AI* step (summarize, classify, extract) uses Gemini or Claude — never a paid AI API.
+
+Implemented as Hermes skills/scripts: `hermes/skills/web-search` (SearXNG), `web-scrape` (Crawl4AI),
+`memory-recall` (Qdrant) + `scripts/index-vault.py` (Gemini embeddings → Qdrant), and `claude-code`
+(delegate to Claude Code via the host bridge `scripts/claude-bridge.py`). Obsidian MCP is wired into both
+Hermes (`config.yaml mcp_servers`) and Claude Code (`.mcp.json`) so they share one vault brain.
 
 ## 5. Process / Runtime Model — Docker Compose (local Apple Silicon)
 - **One `docker-compose.yml`** runs: `hermes` (:8642), `searxng` (:8080), `crawl4ai` (:11235),
@@ -188,9 +196,12 @@ No paid SaaS. Each is a free container wired into Hermes (and Claude Code) as an
 **Repo layout** (`10_Projects/agent-home/`):
 ```
 /dashboard         Next.js + Tailwind app (:3737) + Dockerfile
-/hermes            config.yaml, profiles/, .env.example, skills/ (incl. prompt-foundry)
-/scripts           install, doctor
-docker-compose.yml  hermes + obsidian-mcp + searxng + crawl4ai + qdrant + dashboard
+/hermes            config.yaml, .env.example, Dockerfile, profiles/, skills/
+                   skills: prompt-foundry, web-search, web-scrape, memory-recall, claude-code
+/scripts           install.sh, doctor.sh, index-vault.py (Qdrant), claude-bridge.py (Claude Code)
+/infra/searxng     settings.yml (JSON enabled)
+docker-compose.yml  hermes + searxng + crawl4ai + qdrant + dashboard (all 127.0.0.1)
+.mcp.json          Claude Code MCP servers (incl. obsidian — shared vault)
 /docs              design-research.md, architecture.md (this), runbooks
 ```
 

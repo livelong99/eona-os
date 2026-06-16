@@ -20,9 +20,14 @@ Optionally copy `.env.local.example` → `.env.local` to point at a non-default 
   clearly-labeled mock data, so the UI is demonstrable before Phase 1 is run.
 
 ## Wire to real Hermes
-The client expects these gateway endpoints (verify/adjust against the installed Hermes API):
-`GET /` (health), `GET /api/kanban/tasks`, `GET /api/memory/graph`, `POST /api/agents/:id/chat`,
-`WS /task_events`. Map them in `src/lib/hermes.ts`.
+The client targets the Hermes **API server** (`127.0.0.1:8642`, `hermes gateway run`):
+- `GET /health` — gateway health
+- `POST /v1/chat/completions` — OpenAI-compatible chat (agent tabs)
+- `POST /v1/runs` + SSE `GET /v1/runs/{id}/events` — async runs + lifecycle stream (Goal Mode)
+
+Kanban + the memory graph are **not** on the 8642 API server. They live in the Hermes **dashboard
+backend** (`:9119`, auth-gated: `/api/sessions`, WS `/api/ws`) or the kanban CLI/DB — so `getTasks()` and
+`getMemory()` in `src/lib/hermes.ts` use mock data with a TODO to wire :9119 next.
 
 ## Layout / structure
 ```

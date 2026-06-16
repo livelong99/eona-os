@@ -1,13 +1,17 @@
-// Typed Hermes gateway client (REST + task_events WS) with graceful offline
-// mock fallback. See docs/architecture.md §4.A/D.
+// Typed Hermes API client. Targets the OpenAI-compatible Hermes API server
+// (default 127.0.0.1:8642): GET /health, POST /v1/chat/completions, POST /v1/runs
+// + SSE GET /v1/runs/{id}/events. Falls back to clearly-labeled mock data when the
+// gateway is unreachable. See docs/architecture.md §4.A and the Hermes docs:
+// https://github.com/NousResearch/hermes-agent (gateway/platforms/api_server.py)
+//
+// NOTE: the Hermes *API server* (8642) exposes health/chat/runs/sessions but NOT
+// kanban or a memory graph. Those live in the dashboard backend (9119, auth-gated)
+// or the kanban CLI/DB. So getTasks()/getMemory() use mock data until we wire the
+// 9119 API; getHealth()/sendMessage()/startRun() are real.
 import type { MemoryGraph, Message, Task, TaskEvent } from "./types";
 import { MOCK_EVENTS, MOCK_MEMORY, MOCK_TASKS } from "./mock";
 
-const BASE =
-  process.env.NEXT_PUBLIC_HERMES_URL ?? "http://127.0.0.1:8642";
-const WS =
-  process.env.NEXT_PUBLIC_HERMES_WS ?? "ws://127.0.0.1:8642/task_events";
-
+const BASE = process.env.NEXT_PUBLIC_HERMES_URL ?? "http://127.0.0.1:8642";
 const TIMEOUT_MS = 1500;
 
 async function tryFetch<T>(path: string, init?: RequestInit): Promise<T | null> {
@@ -29,77 +33,103 @@ export interface GatewayHealth {
 }
 
 export async function getHealth(): Promise<GatewayHealth> {
-  const ok = await tryFetch<unknown>("/");
+  const ok = await tryFetch<unknown>("/health");
   return { live: ok !== null, base: BASE };
 }
 
-export async function getTasks(): Promise<{ tasks: Task[]; live: boolean }> {
-  const data = await tryFetch<{ tasks: Task[] }>("/api/kanban/tasks");
-  if (data?.tasks) return { tasks: data.tasks, live: true };
-  return { tasks: MOCK_TASKS, live: false };
-}
-
-export async function getMemory(): Promise<{ graph: MemoryGraph; live: boolean }> {
-  const data = await tryFetch<MemoryGraph>("/api/memory/graph");
-  if (data?.nodes) return { graph: data, live: true };
-  return { graph: MOCK_MEMORY, live: false };
+// --- Chat: OpenAI-compatible /v1/chat/completions ----------------------------
+interface ChatCompletion {
+  choices?: { message?: { content?: string } }[];
 }
 
 export async function sendMessage(
-  agentId: string,
+  agentModel: string,
   text: string,
 ): Promise<{ reply: Message; live: boolean }> {
-  const data = await tryFetch<{ reply: Message }>(`/api/agents/${agentId}/chat`, {
+  const data = await tryFetch<ChatCompletion>("/v1/chat/completions", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({
+      model: agentModel,
+      messages: [{ role: "user", content: text }],
+      stream: false,
+    }),
   });
-  if (data?.reply) return { reply: data.reply, live: true };
-  // Mock reply — clearly labeled so it's never mistaken for a real model.
+  const content = data?.choices?.[0]?.message?.content;
+  if (content) {
+    return {
+      reply: { id: `m-${Date.now()}`, role: "agent", text: content, ts: Date.now() },
+      live: true,
+    };
+  }
   const reply: Message = {
     id: `m-${Date.now()}`,
     role: "agent",
     ts: Date.now(),
     text:
-      `(offline mock) Hermes gateway not detected at ${BASE}. ` +
-      `Once it's running, "${agentId}" will answer here. You said: "${text}"`,
+      `(offline mock) Hermes API not detected at ${BASE}. ` +
+      `Once \`hermes gateway run\` is up, this calls /v1/chat/completions. You said: "${text}"`,
   };
   return { reply, live: false };
 }
 
+// --- Runs: start an async run and stream its SSE lifecycle events -------------
+export async function startRun(
+  prompt: string,
+): Promise<{ runId: string | null; live: boolean }> {
+  const data = await tryFetch<{ run_id?: string; id?: string }>("/v1/runs", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ input: prompt }),
+  });
+  const runId = data?.run_id ?? data?.id ?? null;
+  return { runId, live: runId !== null };
+}
+
+/** Stream a run's SSE events (GET /v1/runs/{id}/events). Returns unsubscribe. */
+export function streamRunEvents(
+  runId: string,
+  onEvent: (e: TaskEvent) => void,
+): () => void {
+  const es = new EventSource(`${BASE}/v1/runs/${runId}/events`);
+  es.onmessage = (ev) => {
+    try {
+      const raw = JSON.parse(ev.data) as Partial<TaskEvent> & { type?: string };
+      onEvent({
+        id: raw.id ?? `e-${Date.now()}`,
+        taskId: runId,
+        kind: raw.kind ?? raw.type ?? "event",
+        message: raw.message ?? ev.data.slice(0, 160),
+        ts: raw.ts ?? Date.now(),
+      });
+    } catch {
+      /* ignore non-JSON keepalives */
+    }
+  };
+  return () => es.close();
+}
+
+// --- Kanban + Memory: not on the 8642 API server. Mock until 9119 is wired. ---
+export async function getTasks(): Promise<{ tasks: Task[]; live: boolean }> {
+  // TODO: wire to the dashboard backend (:9119) or kanban DB; no REST on :8642.
+  return { tasks: MOCK_TASKS, live: false };
+}
+
+export async function getMemory(): Promise<{ graph: MemoryGraph; live: boolean }> {
+  // TODO: build from the Obsidian MCP graph / Qdrant; no REST graph on :8642.
+  return { graph: MOCK_MEMORY, live: false };
+}
+
 /**
- * Subscribe to task_events. Returns an unsubscribe fn. Falls back to a
- * replay of mock events when the WS can't connect.
+ * Kanban activity ticker. No global event stream exists on the 8642 API server
+ * (per-run SSE only), so this replays mock events until the :9119 WS (/api/ws)
+ * is wired. Returns an unsubscribe fn.
  */
 export function subscribeEvents(onEvent: (e: TaskEvent) => void): () => void {
-  let socket: WebSocket | null = null;
-  let mockTimer: ReturnType<typeof setInterval> | null = null;
-
-  try {
-    socket = new WebSocket(WS);
-    socket.onmessage = (ev) => {
-      try {
-        onEvent(JSON.parse(ev.data) as TaskEvent);
-      } catch {
-        /* ignore malformed frames */
-      }
-    };
-    socket.onerror = () => startMock();
-  } catch {
-    startMock();
-  }
-
-  function startMock() {
-    if (mockTimer) return;
-    let i = 0;
-    mockTimer = setInterval(() => {
-      onEvent({ ...MOCK_EVENTS[i % MOCK_EVENTS.length], id: `me-${i}`, ts: Date.now() });
-      i++;
-    }, 4000);
-  }
-
-  return () => {
-    socket?.close();
-    if (mockTimer) clearInterval(mockTimer);
-  };
+  let i = 0;
+  const timer = setInterval(() => {
+    onEvent({ ...MOCK_EVENTS[i % MOCK_EVENTS.length], id: `me-${i}`, ts: Date.now() });
+    i++;
+  }, 4000);
+  return () => clearInterval(timer);
 }

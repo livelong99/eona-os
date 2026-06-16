@@ -30,7 +30,7 @@ export function ChatView({ agent }: ChatViewProps) {
     setDraft("");
     setBusy(true);
     try {
-      const { reply } = await sendMessage(agent.id, text);
+      const { reply } = await sendMessage(agent.model, text);
       setMessages((prev) => [...prev, reply]);
     } finally {
       setBusy(false);

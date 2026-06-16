@@ -12,8 +12,8 @@ info() { printf "\033[1;36m• %s\033[0m\n" "$*"; }
 
 info "Agent Home doctor"
 
-# 1) Published ports must be 127.0.0.1 only (8642 gateway, 3737 dash, tools) ---
-for p in 8642 3737 8080 11235 6333; do
+# 1) Published ports must be 127.0.0.1 only (8642 api, 3737 dash, tools, 8765 bridge)
+for p in 8642 3737 8080 11235 6333 8765; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN 2>/dev/null | grep -q '\*:'"$p"; then
     bad "Port $p bound to 0.0.0.0 (LAN-exposed). Publish as 127.0.0.1:$p:$p only."
   else

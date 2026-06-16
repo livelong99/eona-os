@@ -18,6 +18,8 @@ WORKDIR /root
 
 EXPOSE 8642
 
-# Initialize the Kanban board then start the gateway (binds 0.0.0.0 inside the
-# container; host exposure is controlled by the compose 127.0.0.1 publish).
-CMD ["bash", "-lc", "hermes kanban init || true; hermes gateway start --host 0.0.0.0 --port 8642"]
+# Init the Kanban board, then run the gateway in the FOREGROUND (recommended for
+# Docker). The gateway hosts the OpenAI-compatible API server on :8642. Host bind
+# comes from API_SERVER_HOST (0.0.0.0 in-container); host exposure is the compose
+# 127.0.0.1 publish.
+CMD ["bash", "-lc", "hermes kanban init || true; hermes gateway run"]

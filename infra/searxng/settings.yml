@@ -4,7 +4,7 @@
 use_default_settings: true
 
 server:
-  secret_key: "CHANGE_ME_run_openssl_rand_hex_32"
+  secret_key: "11c58926716c9b2e7163ad6c1e55fe43ad23af641625f15d5297e74defdfef0b"
   limiter: false
   image_proxy: true
 

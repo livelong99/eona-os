@@ -12,12 +12,14 @@ services:
       - path: ./hermes/.env # GEMINI_API_KEY, MCP_OBSIDIAN_API_KEY (never committed)
         required: false # created by scripts/install.sh from .env.example
     environment:
-      - HERMES_HOST=0.0.0.0 # in-container bind; host exposure is the 127.0.0.1 publish below
+      - API_SERVER_HOST=0.0.0.0 # in-container bind; host exposure is the 127.0.0.1 publish below
+      - API_SERVER_PORT=8642
       - OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
-      - OBSIDIAN_BASE_URL=http://host.docker.internal:27123
       - SEARXNG_URL=http://searxng:8080
       - CRAWL4AI_URL=http://crawl4ai:11235
       - QDRANT_URL=http://qdrant:6333
+      - CLAUDE_BRIDGE_URL=http://host.docker.internal:8765 # host-side Claude Code bridge
+      # CLAUDE_BRIDGE_TOKEN comes from hermes/.env (env_file above)
     volumes:
       - hermes_state:/root/.hermes
       - ./hermes/config.yaml:/root/.hermes/config.yaml:ro

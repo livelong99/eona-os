@@ -18,8 +18,10 @@ export function PromptFoundryView() {
     setBusy(true);
     setOutput("");
     try {
+      // Uses the prompt-foundry skill instructions via the Gemini model. Full
+      // profile/skill routing (prompt-writer) runs through Hermes server-side.
       const { reply } = await sendMessage(
-        "prompt-writer",
+        "gemini-pro",
         `[prompt-foundry target=${target}] ${text}`,
       );
       setOutput(reply.text);
