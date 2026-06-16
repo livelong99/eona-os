@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Agent Home — installer. Docker Compose stack on local Apple Silicon.
-# Paid creds: GEMINI_API_KEY only (Claude uses the Claude Code CLI subscription).
+# Providers: Claude Code (subscription, PRIMARY) → Gemini (fallback) → OpenRouter
+# (bulk/last-resort). Keys: GEMINI_API_KEY + OPENROUTER_API_KEY. No local models.
 # Host-native (you install these yourself): Obsidian + Local REST plugin,
-# Claude Code CLI, and optionally Ollama. Everything else runs in Docker.
+# Claude Code CLI. Everything else runs in Docker.
 # Hermes uses the OFFICIAL image (nousresearch/hermes-agent) — no build scripts.
 set -euo pipefail
 
@@ -19,10 +20,8 @@ command -v docker >/dev/null 2>&1 || { warn "Docker not found — install Docker
 docker compose version >/dev/null 2>&1 || { warn "Docker Compose v2 required."; exit 1; }
 say "Docker OK: $(docker --version)"
 
-command -v claude >/dev/null 2>&1 && say "Claude Code CLI found." \
-  || warn "Claude Code CLI not found on host — install it (the premium runtime tab)."
-command -v ollama >/dev/null 2>&1 && say "Ollama found (optional local tier)." \
-  || warn "Ollama not found (optional). Install from https://ollama.com for a free local tier."
+command -v claude >/dev/null 2>&1 && say "Claude Code CLI found (PRIMARY executor)." \
+  || warn "Claude Code CLI not found on host — install it; it's the PRIMARY provider via the bridge."
 
 # 2) Seed ~/.hermes (the official /opt/data dir) from the repo -----------------
 mkdir -p "${HERMES_HOME}/skills"

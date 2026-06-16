@@ -33,13 +33,13 @@ surface produces maximally-detailed prompts we paste into **Google Flow** for im
 |---|----------|--------|-------------|
 | 1 | Build philosophy | **Orchestrator skin** — reuse Hermes as engine | Weeks not months; depend on upstream Hermes |
 | 2 | Stack | **Python** engine (Hermes/FastAPI) + **Next.js + Tailwind** dashboard | Mirrors Hermes' own arch; richest MCP ecosystem |
-| 3 | Deployment | **Local Mac (Apple Silicon)** via **Docker Compose** (Ollama runs native for Metal GPU) | Self-hosted, reproducible; everything but Ollama is a container |
-| 4 | Providers | **Claude Code (subscription) + Gemini (API) + optional local Ollama** | The ONLY paid items are the Claude subscription + Gemini key. Local is free. |
+| 3 | Deployment | **Local Mac (Apple Silicon)** via **Docker Compose** | Self-hosted, reproducible; all services are containers (no local model runtime) |
+| 4 | Providers | **Claude Code (PRIMARY) → Gemini (fallback) → OpenRouter (bulk/last-resort)** | Claude is first choice (subscription); Gemini only when Claude unavailable; OpenRouter replaces local. No Ollama. |
 | 5 | Enterprise tools | **Self-hosted OSS via Docker** — SearXNG (search), Crawl4AI (scrape), Qdrant (vector memory) | No paid SaaS (Firecrawl/etc.); any AI capability uses Claude/Gemini |
 | 6 | v1 pillars | Multi-agent orchestration · Shared Obsidian memory · dashboard · **Prompt Foundry** | Studio v1 = Google Flow prompts, not paid media APIs |
 
-**Cost principle:** the *only* paid things are the **Claude Code subscription** and the **Gemini API key**.
-Everything else is free/OSS, self-hosted via Docker, or handled by Claude/Gemini. Hermes itself is free (MIT).
+**Cost principle:** paid = **Claude Code subscription** + **Gemini API key** + **OpenRouter** (use its free/cheap
+models). Everything else is free/OSS, self-hosted via Docker. Hermes itself is free (MIT). No local model runtime.
 
 **Deferred:** paid-only providers (Kimi K2, Grok, OpenRouter, GLM, Fusion), paid media APIs (Grok Imagine /
 MiniMax / HeyGen), paid search SaaS (Firecrawl), SEO auto-publish (Netlify / WordPress), VPS / remote topology,
@@ -47,8 +47,8 @@ OpenClaw / Antigravity / Codex tabs.
 
 ## 3. High-Level Architecture (5-layer stack)
 
-All containers run under one **Docker Compose** stack bound to `127.0.0.1`; **Ollama runs native** on macOS
-(Docker on Apple Silicon has no Metal GPU access, so containerized local models would be crippled).
+All containers run under one **Docker Compose** stack bound to `127.0.0.1`. **Claude Code runs host-native**
+(the primary executor, reached via the bridge); there is **no local model runtime** (Ollama removed).
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -56,21 +56,21 @@ All containers run under one **Docker Compose** stack bound to `127.0.0.1`; **Ol
 │     Mission Control · Kanban · Goal Mode · Agents · Memory graph    │
 │     · Prompt Foundry (Studio)                                       │
 └───────────────▲───────────────────────────────────────────────────┘
-                │ REST + SSE/WebSocket (127.0.0.1 only)
+                │ REST + SSE (127.0.0.1 only)
 ┌───────────────┴───────────────────────────────────────────────────┐
 │ L3  ENGINE — Hermes Agent gateway (free, MIT)  :8642     [docker]   │
 │     Kanban dispatcher (SQLite, WAL, task_events)                    │
 │     Profiles · delegate_task · async "Hive" · /goal judge loop      │
 │     · MCP clients · skills (SKILL.md)                               │
-│   ── side runtime ──▶ Claude Code CLI (subscription; tool + tab)    │
-└──┬──────────────┬────────────────┬──────────────────┬──────────────┘
-   │ MCP :27123    │ HTTPS          │ local :11434      │ OSS tools (docker)
-┌──┴─────────┐ ┌───┴────────────┐ ┌─┴──────────────┐ ┌─┴────────────────────┐
-│ L1 MEMORY   │ │ L2 PROVIDERS    │ │ A local (opt)  │ │ TOOLS                 │
-│ Obsidian    │ │ C Gemini (API)  │ │ Ollama native  │ │ SearXNG  (search)     │
-│ vault + MCP │ │ D Claude Code   │ │ — free/private │ │ Crawl4AI (scrape)     │
-│ + Qdrant    │ │   (subscription)│ └────────────────┘ │ Qdrant   (vector mem) │
-└─────────────┘ └─────────────────┘                    └───────────────────────┘
+│   ══ PRIMARY ══▶ Claude Code CLI (subscription; host bridge + tab)  │
+└──┬──────────────┬───────────────────────────────┬─────────────────┘
+   │ MCP :27123    │ provider routing               │ OSS tools (docker)
+┌──┴─────────┐ ┌───┴───────────────────────────┐ ┌─┴────────────────────┐
+│ L1 MEMORY   │ │ L2 PROVIDERS (work tier)       │ │ TOOLS                 │
+│ Obsidian    │ │ 1 Claude Code  — PRIMARY        │ │ SearXNG  (search)     │
+│ vault + MCP │ │ 2 Gemini (API) — fallback+engine│ │ Crawl4AI (scrape)     │
+│ + Qdrant    │ │ 3 OpenRouter   — bulk/last-resort│ │ Qdrant   (vector mem) │
+└─────────────┘ └─────────────────────────────────┘ └───────────────────────┘
   L0 Capture (optional, later): OMI/voice → vault
 ```
 
@@ -104,24 +104,24 @@ reads. The dashboard is a viewer/controller over Hermes' REST API plus a Claude 
 - **Guardrail:** secrets stay OUT of the vault; append-only dated summaries; honor PARA + `[[wikilink]]`
   conventions and the vault `CLAUDE.md` rules (never delete/overwrite notes).
 
-### C. Provider mesh — three tiers, two paid
-The only paid items are the Claude subscription and the Gemini key. Each provider is config in `config.yaml`
-(+ the Gemini key in `.env`).
+### C. Provider mesh — Claude-primary, three roles
+Work routes to Claude first; Gemini is the fallback; OpenRouter is the bulk/last-resort tier. No local models.
 
-| Tier | Provider | Cost | Role |
-|------|----------|------|------|
-| **A** | Ollama (native, `:11434`) — *optional* | free, private | Offline/bulk + sensitive-data tier |
-| **C** | Gemini Pro / Flash (Google API) | API key (free tier + paid) | Flash = judge/high-freq; Pro = heavy; Prompt Foundry; engine backbone |
-| **D** | Claude Code CLI | existing subscription, no per-token | Premium runtime + own dashboard tab; coding/agentic delegation |
+| Role | Provider | Cost | Use |
+|------|----------|------|-----|
+| **Primary** | **Claude Code CLI** (subscription) | no per-token | First choice for all real/agentic work, via the host bridge + `claude-code` skill; also its own dashboard tab |
+| **Fallback** | **Gemini** Pro/Flash (Google API) | API key (free tier + paid) | Used when Claude Code is unavailable; **also Hermes' own engine model** (orchestration/judge) since Claude is a CLI, not an API |
+| **Bulk / last-resort** | **OpenRouter** (`openrouter/auto` + cheap/free models) | OpenRouter key (free/cheap) | High-volume/cheap batch work; final fallback after Gemini. Replaces the removed local tier |
 
-**Claude integration detail:** Claude is a first-class *runtime* (Claude Code CLI), not a metered API key —
-exactly as the original's "Claude" tab *is* Claude Code. It runs as its own session, reachable (1) as a
-dashboard tab and (2) by Hermes via `terminal`/CLI delegation, sharing the brain via the Obsidian MCP in Claude
-Code's config.
+**Why Gemini is also the engine model:** Claude Code is a CLI runtime, not an API provider, so Hermes' own
+agent loop can't run *on* Claude. Hermes runs on Gemini and **delegates execution to Claude Code first** (the
+`claude-code` skill / bridge). That delivers "Claude primary" without an Anthropic API bill.
 
-**Routing policy (cheap-first, judge-gated):** Ollama (if present) → Gemini Flash → Gemini Pro → Claude Code,
-escalate only when a Gemini-Flash judge shows the cheaper tier failing. No external promo/free-cloud models —
-they were dropped (data-logging + transient).
+**Claude integration:** reachable (1) as a dashboard tab and (2) by Hermes via the host bridge
+(`scripts/claude-bridge.py`, token-gated). It shares the brain via the Obsidian MCP in Claude Code's `.mcp.json`.
+
+**Routing policy:** Claude Code (primary) → Gemini (fallback) → OpenRouter (bulk/last-resort). Hermes'
+engine-level `fallback` is set to OpenRouter for resilience when Gemini errors/rate-limits.
 
 ### D. Dashboard — Next.js + Tailwind (`localhost:3737`)
 - Standalone Next.js shell over Hermes' REST/WS API (design control; we forgo Hermes' plugin-inherited
@@ -131,9 +131,9 @@ they were dropped (data-logging + transient).
   user/vault status chip pinned bottom.
 - **Nav (v1):**
   - **WORKSPACE:** Mission Control, Kanban (triage→todo→ready→running→blocked→done).
-  - **AGENTS:** Claude (Claude Code panel), Gemini (Hermes Gemini profiles), Local (Ollama, optional). Each is
-    its own backend session — switching tabs never stops background work. A **tier badge** shows the active
-    provider (Local / Gemini / Claude Code).
+  - **AGENTS:** Claude (Claude Code panel — primary), Gemini (fallback), OpenRouter (bulk). Each is its own
+    backend session — switching tabs never stops background work. A **role badge** shows Primary / Fallback /
+    Bulk.
   - **SELF:** Prompt Foundry, Memory (purple knowledge-"galaxy" graph), Goal Mode.
 - **Screen archetypes (3):** Chat (Claude/Gemini/Local), Board (Kanban), Graph (Memory). Prompt Foundry = a
   Chat variant with a structured prompt-output panel.
@@ -174,11 +174,11 @@ Hermes (`config.yaml mcp_servers`) and Claude Code (`.mcp.json`) so they share o
   locally-built image — no build-time `curl|bash`. Its data dir `/opt/data` is the host's `~/.hermes`
   (config.yaml, `.env`, sessions, memory, skills), seeded by `scripts/install.sh`.
 - **Host-native (not containerized), reached via `host.docker.internal`:**
+  - **Claude Code** CLI (**primary provider**) — tied to your subscription/login; invoked by Hermes via the
+    token-gated bridge (`scripts/claude-bridge.py`) and surfaced as the primary dashboard tab.
   - **Obsidian** desktop + Local REST API plugin (`:27123`) — Obsidian is a GUI app; Hermes connects to it.
-  - **Ollama** (`:11434`) — Apple-Silicon containers have no Metal GPU, so a containerized model would be
-    CPU-only and far too slow. Optional tier.
-  - **Claude Code** CLI — tied to your subscription/login; invoked by Hermes via a delegation bridge and
-    surfaced in the dashboard.
+  - No local model runtime — Ollama was removed (it was hurting host performance); the cheap/bulk tier is
+    OpenRouter (a container-reachable API).
 - Always-on: Docker Desktop "start on login" + restart policies (`unless-stopped`); prevent sleep; optional
   **Tailscale** for private remote access (no public exposure).
 - Single-host: Hermes Kanban & `delegate_task` are single-host by design — a "10-agent company" on one machine,
@@ -191,7 +191,7 @@ Hermes (`config.yaml mcp_servers`) and Claude Code (`.mcp.json`) so they share o
 | Next.js + Tailwind dashboard (:3737), 3 archetypes | Hermes Agent engine (MIT, Docker) |
 | Hermes profiles (judge/researcher/writer/seo/prompt-*) | Kanban dispatcher, `delegate_task`, Goal Mode |
 | Prompt Foundry skill + Google Flow prompt-rules | Obsidian Local REST API plugin + Obsidian MCP server |
-| Claude-Code-as-runtime integration (CLI + MCP) | Claude Code CLI (sub), Gemini API, Ollama (native, opt) |
+| Claude-Code-as-runtime integration (CLI + MCP) | Claude Code CLI (sub), Gemini API, OpenRouter API |
 | `docker-compose.yml` + tool wiring (search/scrape/vector) | SearXNG, Crawl4AI, Qdrant (Docker images) |
 | Cheap-first routing + judge | Existing Obsidian vault (PARA) as shared memory |
 | Setup/doctor scripts | |
@@ -219,12 +219,12 @@ docker-compose.yml  hermes + searxng + crawl4ai + qdrant + dashboard (all 127.0.
 - Honor vault `CLAUDE.md`: append/patch, never delete/overwrite; one focused commit per edit.
 
 ## 8. Phased Build Plan
-1. **Stack up (Docker):** `docker compose up` brings up hermes + obsidian-mcp + searxng + crawl4ai + qdrant +
-   dashboard; add the Gemini key; (optional) run Ollama native. *Gate:* gateway healthy, dashboard live on
-   :3737, `/goal` four-file test passes.
+1. **Stack up (Docker):** `docker compose up` brings up hermes + searxng + crawl4ai + qdrant + dashboard; add
+   the Gemini + OpenRouter keys; start the Claude bridge on the host. *Gate:* gateway healthy, dashboard live
+   on :3737, `/goal` four-file test passes.
 2. **Memory + tools:** wire Obsidian MCP (Hermes *and* Claude Code) + Qdrant semantic index; wire SearXNG +
-   Crawl4AI as Hermes search/scrape skills. Confirm Gemini + Claude each answer a vault-only fact and run a
-   live web search via SearXNG.
+   Crawl4AI as Hermes search/scrape skills. Confirm Claude (primary) + Gemini (fallback) each answer a
+   vault-only fact and run a live web search via SearXNG.
 3. **Orchestration + dashboard:** Kanban dispatcher + swarm, Goal Mode, `delegate_task`; dashboard shows live
    Kanban, Claude tab, Gemini tab, Memory graph.
 4. **Prompt Foundry:** skill + tab + prompt-rules registry + `prompt-writer`/`prompt-judge` loop; outputs to
@@ -233,10 +233,12 @@ docker-compose.yml  hermes + searxng + crawl4ai + qdrant + dashboard (all 127.0.
 
 ## 9. Verification (end-to-end)
 - **Stack:** `docker compose ps` all healthy; every published port bound to 127.0.0.1; dashboard 200 on :3737.
-- **Engine:** gateway healthy on :8642; `hermes chat` answers on Gemini (and Ollama if present); Kanban board
-  created; `/goal` four-file test passes (Gemini Flash judge); routing escalates a hard task Gemini-Flash → Pro.
-- **Memory + tools:** a vault-only fact is retrieved by a Gemini profile AND the Claude Code session via the
-  Obsidian MCP; Qdrant returns a semantic match; a SearXNG query + Crawl4AI fetch return results through Hermes.
+- **Engine:** gateway healthy on :8642; `hermes chat` answers on Gemini; Kanban board created; `/goal`
+  four-file test passes; an OpenRouter fallback responds when Gemini is forced to fail.
+- **Providers:** a real task routes to **Claude Code first** (via the bridge); disabling the bridge falls back
+  to **Gemini**; a bulk task uses **OpenRouter**. No local model is reachable (Ollama removed).
+- **Memory + tools:** a vault-only fact is retrieved by Gemini AND the Claude Code session via the Obsidian
+  MCP; Qdrant returns a semantic match; a SearXNG query + Crawl4AI fetch return results through Hermes.
 - **Orchestration:** one brief fanned to ≥3 profiles via Kanban (+ a Claude Code delegation); parallel sessions
   confirmed; tab-switch doesn't stop background work; `task_events` renders live.
 - **Dashboard:** :3737 loads WORKSPACE/AGENTS/SELF nav, Claude + Gemini tabs, live Kanban + Memory graph, nav

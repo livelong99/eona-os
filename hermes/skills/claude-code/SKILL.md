@@ -1,17 +1,18 @@
 ---
 name: claude-code
-description: Delegate heavy coding / multi-file agentic work to Claude Code (the premium runtime) via the host bridge. Use when Gemini/local tiers aren't strong enough.
+description: PRIMARY executor. Route real/agentic work to Claude Code (your subscription) via the host bridge first; fall back to Gemini only if it's unavailable.
 ---
 
-# Delegate to Claude Code
+# Delegate to Claude Code (PRIMARY)
 
-Claude Code is the premium agent runtime (your subscription, no per-token cost). It runs on the **host**;
+Claude Code is the **primary** agent runtime (your subscription, no per-token cost). It runs on the **host**;
 Hermes runs in Docker — so delegation goes through the host bridge (`scripts/claude-bridge.py`).
 
 ## When to use
-- Multi-file refactors, real codebase edits, debugging, or agentic tasks where the cheap tier (Gemini Flash)
-  or local model fails a judge check — i.e. the top of the routing escalation.
-- NOT for simple Q&A or bulk text — keep those on Gemini/local.
+- **By default for real work** — coding, multi-file edits, debugging, research, agentic multi-step tasks.
+  Claude Code is the first choice, not an escalation.
+- **Fallback:** if the bridge is down / Claude Code is unavailable, fall back to **Gemini**; for very
+  high-volume/cheap batch work use **OpenRouter** (the bulk tier).
 
 ## How to call
 The bridge runs on the host at `CLAUDE_BRIDGE_URL` (default `http://host.docker.internal:8765`) and requires

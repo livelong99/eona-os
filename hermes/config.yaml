@@ -3,17 +3,25 @@
 # Secrets live in hermes/.env (see .env.example) — never inline here.
 # After install, reconcile against:  hermes config schema  /  /api/config/schema.
 
-# --- Model / provider ---------------------------------------------------------
-# Hermes natively detects Gemini from GEMINI_API_KEY (shown as "Google / Gemini"
-# in `hermes status`). Pick the exact model id with `hermes model`; the
-# provider/model format is e.g. "google/gemini-2.5-flash".
+# --- Providers & routing ------------------------------------------------------
+# Execution preference (the work tier):
+#   1. PRIMARY  = Claude Code (your subscription) via the host bridge + claude-code
+#      skill — Hermes routes real/agentic work there first.
+#   2. FALLBACK = Gemini (this engine model) when Claude Code is unavailable.
+#   3. BULK / LAST-RESORT = OpenRouter (cheap/free models) for high-volume work
+#      and as the final fallback after Gemini.
+# NOTE: Hermes' OWN engine loop must run on an API model — Claude Code is a CLI
+# runtime, not an API provider — so the engine model below is Gemini, with
+# OpenRouter as the engine-level fallback. Local/Ollama has been REMOVED.
 model:
-  provider: auto # auto-detect from the key present in .env
-  default: "google/gemini-2.5-flash" # cheap default; escalate to a pro model per task. Verify id.
+  provider: auto # auto-detect from the key in .env (GEMINI_API_KEY)
+  default: "google/gemini-2.5-flash" # engine + Claude's fallback. Verify id with `hermes model`.
 
-# For a free local tier, create a separate profile instead of editing this:
-#   hermes profile create local --clone
-#   (then point it at http://host.docker.internal:11434/v1 — Ollama)
+# Engine-level fallback chain (tried when the primary model errors/rate-limits).
+# Configure via `hermes fallback add` too; this documents intent.
+fallback:
+  providers:
+    - "openrouter/auto" # cheap/last-resort; needs OPENROUTER_API_KEY in .env
 
 # --- Agent behavior -----------------------------------------------------------
 agent:

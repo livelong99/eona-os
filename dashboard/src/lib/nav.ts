@@ -7,7 +7,7 @@ export type ViewId =
   | "kanban"
   | "agent:claude"
   | "agent:gemini"
-  | "agent:local"
+  | "agent:openrouter"
   | "prompt-foundry"
   | "memory"
   | "goal-mode";
@@ -34,9 +34,9 @@ export interface NavGroup {
 }
 
 export const TIERS: Record<Tier, TierMeta> = {
-  A: { tier: "A", label: "Local", sensitiveOk: true },
-  C: { tier: "C", label: "Gemini", sensitiveOk: true },
-  D: { tier: "D", label: "Claude Code", sensitiveOk: true },
+  primary: { tier: "primary", label: "Primary" },
+  fallback: { tier: "fallback", label: "Fallback" },
+  bulk: { tier: "bulk", label: "Bulk" },
 };
 
 export const AGENTS: Record<string, Agent> = {
@@ -44,25 +44,25 @@ export const AGENTS: Record<string, Agent> = {
     id: "claude",
     name: "Claude",
     gradient: "from-orange-400 to-amber-600",
-    tier: "D",
+    tier: "primary",
     model: "claude-code-cli",
-    blurb: "Claude Code CLI — premium runtime, own session.",
+    blurb: "Claude Code CLI (subscription) — primary executor via the bridge.",
   },
   gemini: {
     id: "gemini",
     name: "Gemini",
     gradient: "from-violet-400 to-fuchsia-600",
-    tier: "C",
-    model: "gemini-pro",
-    blurb: "Google Gemini — engine brain (Pro heavy, Flash judge).",
+    tier: "fallback",
+    model: "google/gemini-2.5-flash",
+    blurb: "Google Gemini — fallback + Hermes engine model.",
   },
-  local: {
-    id: "local",
-    name: "Local",
-    gradient: "from-emerald-400 to-teal-600",
-    tier: "A",
-    model: "gemma-4-12b",
-    blurb: "Ollama / LM Studio — free, private, on-device.",
+  openrouter: {
+    id: "openrouter",
+    name: "OpenRouter",
+    gradient: "from-sky-400 to-indigo-600",
+    tier: "bulk",
+    model: "openrouter/auto",
+    blurb: "OpenRouter — cheap/bulk tier + last-resort fallback.",
   },
 };
 
@@ -79,7 +79,7 @@ export const NAV: NavGroup[] = [
     items: [
       { id: "agent:claude", label: "Claude", icon: "bot", agentId: "claude" },
       { id: "agent:gemini", label: "Gemini", icon: "bot", agentId: "gemini" },
-      { id: "agent:local", label: "Local", icon: "bot", agentId: "local" },
+      { id: "agent:openrouter", label: "OpenRouter", icon: "bot", agentId: "openrouter" },
     ],
   },
   {

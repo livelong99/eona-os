@@ -6,14 +6,14 @@ const now = Date.now();
 const min = (m: number) => now - m * 60_000;
 
 export const MOCK_TASKS: Task[] = [
-  { id: "t1", title: "Research: free Veo prompt patterns", status: "running", assignee: "researcher", tier: "C", updatedAt: min(2) },
-  { id: "t2", title: "Draft launch post for Agent Home", status: "ready", assignee: "writer", tier: "C", updatedAt: min(9) },
-  { id: "t3", title: "SEO pass on architecture note", status: "todo", assignee: "seo", tier: "C", updatedAt: min(14) },
-  { id: "t4", title: "Generate hero image + teaser prompts", status: "running", assignee: "prompt-writer", tier: "C", updatedAt: min(1) },
+  { id: "t1", title: "Research: free Veo prompt patterns", status: "running", assignee: "researcher", tier: "fallback", updatedAt: min(2) },
+  { id: "t2", title: "Draft launch post for Agent Home", status: "ready", assignee: "writer", tier: "fallback", updatedAt: min(9) },
+  { id: "t3", title: "SEO pass on architecture note", status: "todo", assignee: "seo", tier: "bulk", updatedAt: min(14) },
+  { id: "t4", title: "Generate hero image + teaser prompts", status: "running", assignee: "prompt-writer", tier: "fallback", updatedAt: min(1) },
   { id: "t5", title: "Triage: weekly content backlog", status: "triage", updatedAt: min(30) },
-  { id: "t6", title: "Refactor vault sync script", status: "blocked", assignee: "claude", tier: "D", updatedAt: min(22) },
-  { id: "t7", title: "Summarize provider pricing", status: "done", assignee: "local", tier: "A", updatedAt: min(50) },
-  { id: "t8", title: "Build local model benchmark", status: "done", assignee: "local", tier: "A", updatedAt: min(70) },
+  { id: "t6", title: "Refactor vault sync script", status: "blocked", assignee: "claude", tier: "primary", updatedAt: min(22) },
+  { id: "t7", title: "Summarize provider pricing", status: "done", assignee: "openrouter", tier: "bulk", updatedAt: min(50) },
+  { id: "t8", title: "Bulk-tag 200 archive notes", status: "done", assignee: "openrouter", tier: "bulk", updatedAt: min(70) },
 ];
 
 export const MOCK_EVENTS: TaskEvent[] = [
@@ -26,7 +26,7 @@ export const MOCK_EVENTS: TaskEvent[] = [
 function galaxy(): MemoryGraph {
   const labels = [
     "architecture", "design-research", "prompt-foundry", "hermes", "obsidian-memory",
-    "provider-mesh", "kanban", "goal-mode", "gemini", "claude-code", "ollama",
+    "provider-mesh", "kanban", "goal-mode", "gemini", "claude-code", "openrouter",
     "google-flow", "seo", "writer", "researcher", "security", "tailscale", "veo-rules",
   ];
   const nodes = labels.map((label, i) => {

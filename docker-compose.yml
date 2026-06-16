@@ -1,6 +1,7 @@
 # Agent Home — local stack. All published ports bound to 127.0.0.1 only.
-# Host-native (NOT here): Obsidian (+Local REST :27123), Ollama (:11434),
-# Claude Code CLI — reached from containers via host.docker.internal.
+# Host-native (NOT here): Obsidian (+Local REST :27123) and Claude Code CLI
+# (PRIMARY provider) — reached from containers via host.docker.internal.
+# No local models (Ollama removed); cheap/bulk tier is OpenRouter.
 # Image tags marked "verify" should be pinned after first pull.
 
 services:
@@ -15,7 +16,6 @@ services:
       # non-loopback (container) bind without an auth provider. Our own dashboard
       # (:3737) uses the API server below. To enable :9119 later you must add a
       # DashboardAuthProvider or run it with --insecure (localhost-only).
-      - OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
       - SEARXNG_URL=http://searxng:8080
       - CRAWL4AI_URL=http://crawl4ai:11235
       - QDRANT_URL=http://qdrant:6333
