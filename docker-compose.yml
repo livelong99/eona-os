@@ -5,26 +5,27 @@
 
 services:
   hermes:
-    build: ./hermes # builds Hermes from the official installer (see hermes/Dockerfile)
+    image: nousresearch/hermes-agent:latest # official image (no build-time scripts)
     container_name: agenthome-hermes
     restart: unless-stopped
-    env_file:
-      - path: ./hermes/.env # GEMINI_API_KEY, MCP_OBSIDIAN_API_KEY (never committed)
-        required: false # created by scripts/install.sh from .env.example
+    command: gateway run
     environment:
       - API_SERVER_HOST=0.0.0.0 # in-container bind; host exposure is the 127.0.0.1 publish below
-      - API_SERVER_PORT=8642
+      # HERMES_DASHBOARD (:9119) is intentionally OFF: its OAuth gate refuses a
+      # non-loopback (container) bind without an auth provider. Our own dashboard
+      # (:3737) uses the API server below. To enable :9119 later you must add a
+      # DashboardAuthProvider or run it with --insecure (localhost-only).
       - OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
       - SEARXNG_URL=http://searxng:8080
       - CRAWL4AI_URL=http://crawl4ai:11235
       - QDRANT_URL=http://qdrant:6333
       - CLAUDE_BRIDGE_URL=http://host.docker.internal:8765 # host-side Claude Code bridge
-      # CLAUDE_BRIDGE_TOKEN comes from hermes/.env (env_file above)
     volumes:
-      - hermes_state:/root/.hermes
-      - ./hermes/config.yaml:/root/.hermes/config.yaml:ro
+      # Official data dir: holds config.yaml, .env, sessions, memory, skills.
+      # scripts/install.sh seeds ~/.hermes from hermes/ (config, .env, skills, profiles).
+      - "${HOME}/.hermes:/opt/data"
     ports:
-      - "127.0.0.1:8642:8642"
+      - "127.0.0.1:8642:8642" # OpenAI-compatible API + /health
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on: [searxng, crawl4ai, qdrant]
@@ -55,7 +56,9 @@ services:
     volumes:
       - qdrant_data:/qdrant/storage
     ports:
-      - "127.0.0.1:6333:6333"
+      # Host publish on 6533 to avoid clashing with other local Qdrant instances
+      # (e.g. jarvis on 6333). In-network service is still qdrant:6333.
+      - "127.0.0.1:6533:6333"
 
   dashboard: # Next.js mission control
     build: ./dashboard
@@ -69,5 +72,4 @@ services:
     depends_on: [hermes]
 
 volumes:
-  hermes_state:
   qdrant_data:

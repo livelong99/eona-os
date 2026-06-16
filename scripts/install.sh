@@ -3,10 +3,12 @@
 # Paid creds: GEMINI_API_KEY only (Claude uses the Claude Code CLI subscription).
 # Host-native (you install these yourself): Obsidian + Local REST plugin,
 # Claude Code CLI, and optionally Ollama. Everything else runs in Docker.
+# Hermes uses the OFFICIAL image (nousresearch/hermes-agent) — no build scripts.
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="${REPO_DIR}/hermes/.env"
+HERMES_HOME="${HOME}/.hermes"          # mounted into the container as /opt/data
+ENV_FILE="${HERMES_HOME}/.env"
 SEARX="${REPO_DIR}/infra/searxng/settings.yml"
 
 say() { printf "\n\033[1;36m▶ %s\033[0m\n" "$*"; }
@@ -22,19 +24,27 @@ command -v claude >/dev/null 2>&1 && say "Claude Code CLI found." \
 command -v ollama >/dev/null 2>&1 && say "Ollama found (optional local tier)." \
   || warn "Ollama not found (optional). Install from https://ollama.com for a free local tier."
 
-# 2) Secrets -------------------------------------------------------------------
+# 2) Seed ~/.hermes (the official /opt/data dir) from the repo -----------------
+mkdir -p "${HERMES_HOME}/skills"
+[ -f "${HERMES_HOME}/config.yaml" ] || cp "${REPO_DIR}/hermes/config.yaml" "${HERMES_HOME}/config.yaml"
+cp -R "${REPO_DIR}/hermes/skills/." "${HERMES_HOME}/skills/" 2>/dev/null || true
+cp -R "${REPO_DIR}/hermes/profiles" "${HERMES_HOME}/profiles" 2>/dev/null || true
+say "Seeded ${HERMES_HOME} (config.yaml, skills, profiles)."
+
+# 3) Secrets (~/.hermes/.env) --------------------------------------------------
 if [ ! -f "${ENV_FILE}" ]; then
   cp "${REPO_DIR}/hermes/.env.example" "${ENV_FILE}"
   chmod 600 "${ENV_FILE}"
-  warn "Created hermes/.env — add your GEMINI_API_KEY (and Obsidian token), then re-run."
+  warn "Created ${ENV_FILE} — add your GEMINI_API_KEY (also set OPENAI_API_KEY to the same"
+  warn "Gemini key for the OpenAI-compatible endpoint) and your Obsidian token, then re-run."
   exit 0
 fi
 if ! grep -q '^GEMINI_API_KEY=.\+' "${ENV_FILE}"; then
-  warn "GEMINI_API_KEY is empty in hermes/.env. Add it, then re-run."
+  warn "GEMINI_API_KEY is empty in ${ENV_FILE}. Add it, then re-run."
   exit 0
 fi
 
-# 3) SearXNG secret ------------------------------------------------------------
+# 4) SearXNG secret ------------------------------------------------------------
 if grep -q "CHANGE_ME" "${SEARX}" 2>/dev/null; then
   key="$(openssl rand -hex 32)"
   /usr/bin/sed -i '' "s/CHANGE_ME_run_openssl_rand_hex_32/${key}/" "${SEARX}" 2>/dev/null \
@@ -42,7 +52,7 @@ if grep -q "CHANGE_ME" "${SEARX}" 2>/dev/null; then
   say "Generated SearXNG secret_key."
 fi
 
-# 4) Claude bridge token -------------------------------------------------------
+# 5) Claude bridge token -------------------------------------------------------
 if ! grep -q '^CLAUDE_BRIDGE_TOKEN=.\+' "${ENV_FILE}"; then
   tok="$(openssl rand -hex 16)"
   /usr/bin/sed -i '' "s/^CLAUDE_BRIDGE_TOKEN=.*/CLAUDE_BRIDGE_TOKEN=${tok}/" "${ENV_FILE}" 2>/dev/null \
@@ -50,15 +60,15 @@ if ! grep -q '^CLAUDE_BRIDGE_TOKEN=.\+' "${ENV_FILE}"; then
   say "Generated CLAUDE_BRIDGE_TOKEN."
 fi
 
-# 5) Obsidian reminder ---------------------------------------------------------
+# 6) Obsidian reminder ---------------------------------------------------------
 say "Ensure Obsidian is running with the Local REST API plugin (host :27123)."
 say "Containers reach it via host.docker.internal."
 
-# 6) Bring up the stack --------------------------------------------------------
-say "Building + starting the stack (hermes, searxng, crawl4ai, qdrant, dashboard)…"
+# 7) Bring up the stack --------------------------------------------------------
+say "Pulling Hermes + tool images and building the dashboard…"
 docker compose -f "${REPO_DIR}/docker-compose.yml" up -d --build
 
-say "Done. Dashboard → http://127.0.0.1:3737 · Gateway → http://127.0.0.1:8642"
+say "Done. Dashboard → http://127.0.0.1:3737 · API → http://127.0.0.1:8642 · Hermes UI → :9119"
 say "Verify with: scripts/doctor.sh   ·   Logs: docker compose logs -f hermes"
 echo
 say "To enable Claude Code delegation, start the host bridge (separate terminal):"

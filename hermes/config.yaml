@@ -4,19 +4,16 @@
 # After install, reconcile against:  hermes config schema  /  /api/config/schema.
 
 # --- Model / provider ---------------------------------------------------------
-# Primary brain = Gemini via the OpenAI-compatible endpoint. If `hermes model`
-# offers Gemini natively, prefer that + GEMINI_API_KEY; otherwise this custom
-# OpenAI-compat path reads OPENAI_API_KEY (set it to your Gemini key in .env).
+# Hermes natively detects Gemini from GEMINI_API_KEY (shown as "Google / Gemini"
+# in `hermes status`). Pick the exact model id with `hermes model`; the
+# provider/model format is e.g. "google/gemini-2.5-flash".
 model:
-  provider: custom
-  base_url: "https://generativelanguage.googleapis.com/v1beta/openai"
-  default: "gemini-flash" # cheap default; escalate to gemini-pro per task. Verify IDs.
-  context_length: 1000000
-  max_tokens: 8192
+  provider: auto # auto-detect from the key present in .env
+  default: "google/gemini-2.5-flash" # cheap default; escalate to a pro model per task. Verify id.
 
 # For a free local tier, create a separate profile instead of editing this:
 #   hermes profile create local --clone
-#   (then set model.provider=custom, base_url=http://host.docker.internal:11434/v1)
+#   (then point it at http://host.docker.internal:11434/v1 — Ollama)
 
 # --- Agent behavior -----------------------------------------------------------
 agent:

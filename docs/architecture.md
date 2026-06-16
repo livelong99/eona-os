@@ -166,10 +166,13 @@ Implemented as Hermes skills/scripts: `hermes/skills/web-search` (SearXNG), `web
 Hermes (`config.yaml mcp_servers`) and Claude Code (`.mcp.json`) so they share one vault brain.
 
 ## 5. Process / Runtime Model — Docker Compose (local Apple Silicon)
-- **One `docker-compose.yml`** runs: `hermes` (:8642), `searxng` (:8080), `crawl4ai` (:11235),
-  `qdrant` (:6333), `dashboard` (:3737). **Every published port is bound to `127.0.0.1`**
-  (`127.0.0.1:PORT:PORT`). Containers may listen on `0.0.0.0` *inside* the network; host exposure is controlled
-  solely by the `127.0.0.1` publish — that is the correct, safe pattern.
+- **One `docker-compose.yml`** runs: `hermes` (:8642 API + :9119 dashboard backend via `HERMES_DASHBOARD=1`),
+  `searxng` (:8080), `crawl4ai` (:11235), `qdrant` (:6333), `dashboard` (:3737). **Every published port is
+  bound to `127.0.0.1`**. Containers may listen on `0.0.0.0` *inside* the network; host exposure is controlled
+  solely by the `127.0.0.1` publish — the correct, safe pattern.
+- **Hermes uses the official image** `nousresearch/hermes-agent:latest` (`command: gateway run`), not a
+  locally-built image — no build-time `curl|bash`. Its data dir `/opt/data` is the host's `~/.hermes`
+  (config.yaml, `.env`, sessions, memory, skills), seeded by `scripts/install.sh`.
 - **Host-native (not containerized), reached via `host.docker.internal`:**
   - **Obsidian** desktop + Local REST API plugin (`:27123`) — Obsidian is a GUI app; Hermes connects to it.
   - **Ollama** (`:11434`) — Apple-Silicon containers have no Metal GPU, so a containerized model would be
@@ -196,7 +199,7 @@ Hermes (`config.yaml mcp_servers`) and Claude Code (`.mcp.json`) so they share o
 **Repo layout** (`10_Projects/agent-home/`):
 ```
 /dashboard         Next.js + Tailwind app (:3737) + Dockerfile
-/hermes            config.yaml, .env.example, Dockerfile, profiles/, skills/
+/hermes            config.yaml, .env.example, profiles/, skills/ (seeded into ~/.hermes)
                    skills: prompt-foundry, web-search, web-scrape, memory-recall, claude-code
 /scripts           install.sh, doctor.sh, index-vault.py (Qdrant), claude-bridge.py (Claude Code)
 /infra/searxng     settings.yml (JSON enabled)

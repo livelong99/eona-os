@@ -4,7 +4,7 @@ set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VAULT="/Users/perkypanda/Documents/Obsidian/Vault"
-ENV_FILE="${REPO_DIR}/hermes/.env"
+ENV_FILE="${HOME}/.hermes/.env"
 fail=0
 ok()   { printf "\033[1;32m✓ %s\033[0m\n" "$*"; }
 bad()  { printf "\033[1;31m✗ %s\033[0m\n" "$*"; fail=1; }
@@ -12,8 +12,8 @@ info() { printf "\033[1;36m• %s\033[0m\n" "$*"; }
 
 info "Agent Home doctor"
 
-# 1) Published ports must be 127.0.0.1 only (8642 api, 3737 dash, tools, 8765 bridge)
-for p in 8642 3737 8080 11235 6333 8765; do
+# 1) Published ports must be 127.0.0.1 only (8642 api, 9119 ui, 3737 dash, tools, bridge)
+for p in 8642 9119 3737 8080 11235 6533 8765; do
   if lsof -nP -iTCP:"$p" -sTCP:LISTEN 2>/dev/null | grep -q '\*:'"$p"; then
     bad "Port $p bound to 0.0.0.0 (LAN-exposed). Publish as 127.0.0.1:$p:$p only."
   else
@@ -37,9 +37,9 @@ fi
 # 3) .env perms ----------------------------------------------------------------
 if [ -f "${ENV_FILE}" ]; then
   perm="$(stat -f '%A' "${ENV_FILE}" 2>/dev/null || echo '?')"
-  [ "$perm" = "600" ] && ok "hermes/.env perms 600" || bad "hermes/.env perms $perm (chmod 600)"
+  [ "$perm" = "600" ] && ok "~/.hermes/.env perms 600" || bad "~/.hermes/.env perms $perm (chmod 600)"
 else
-  info "hermes/.env not found yet (run scripts/install.sh)"
+  info "~/.hermes/.env not found yet (run scripts/install.sh)"
 fi
 
 # 4) SearXNG secret replaced ---------------------------------------------------

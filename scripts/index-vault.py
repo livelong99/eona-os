@@ -23,7 +23,9 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-QDRANT_URL = os.environ.get("QDRANT_URL", "http://127.0.0.1:6333").rstrip("/")
+# Host-side default uses 6533 (the compose host publish; 6333 may be taken by
+# another local Qdrant). In-container callers set QDRANT_URL=http://qdrant:6333.
+QDRANT_URL = os.environ.get("QDRANT_URL", "http://127.0.0.1:6533").rstrip("/")
 VAULT_DIR = Path(
     os.environ.get(
         "VAULT_DIR",
