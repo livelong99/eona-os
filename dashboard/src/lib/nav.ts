@@ -34,10 +34,9 @@ export interface NavGroup {
 }
 
 export const TIERS: Record<Tier, TierMeta> = {
-  A: { tier: "A", label: "Local", logged: false, sensitiveOk: true },
-  B: { tier: "B", label: "Free cloud", logged: true, sensitiveOk: false },
-  C: { tier: "C", label: "Gemini", logged: false, sensitiveOk: true },
-  D: { tier: "D", label: "Claude Code", logged: false, sensitiveOk: true },
+  A: { tier: "A", label: "Local", sensitiveOk: true },
+  C: { tier: "C", label: "Gemini", sensitiveOk: true },
+  D: { tier: "D", label: "Claude Code", sensitiveOk: true },
 };
 
 export const AGENTS: Record<string, Agent> = {

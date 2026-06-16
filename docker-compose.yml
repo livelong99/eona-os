@@ -1,0 +1,71 @@
+# Agent Home — local stack. All published ports bound to 127.0.0.1 only.
+# Host-native (NOT here): Obsidian (+Local REST :27123), Ollama (:11434),
+# Claude Code CLI — reached from containers via host.docker.internal.
+# Image tags marked "verify" should be pinned after first pull.
+
+services:
+  hermes:
+    build: ./hermes # builds Hermes from the official installer (see hermes/Dockerfile)
+    container_name: agenthome-hermes
+    restart: unless-stopped
+    env_file:
+      - path: ./hermes/.env # GEMINI_API_KEY, MCP_OBSIDIAN_API_KEY (never committed)
+        required: false # created by scripts/install.sh from .env.example
+    environment:
+      - HERMES_HOST=0.0.0.0 # in-container bind; host exposure is the 127.0.0.1 publish below
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
+      - OBSIDIAN_BASE_URL=http://host.docker.internal:27123
+      - SEARXNG_URL=http://searxng:8080
+      - CRAWL4AI_URL=http://crawl4ai:11235
+      - QDRANT_URL=http://qdrant:6333
+    volumes:
+      - hermes_state:/root/.hermes
+      - ./hermes/config.yaml:/root/.hermes/config.yaml:ro
+    ports:
+      - "127.0.0.1:8642:8642"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on: [searxng, crawl4ai, qdrant]
+
+  searxng: # self-hosted web search (replaces Firecrawl/Tavily)
+    image: searxng/searxng:latest # verify/pin
+    container_name: agenthome-searxng
+    restart: unless-stopped
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+    volumes:
+      - ./infra/searxng:/etc/searxng:rw
+    ports:
+      - "127.0.0.1:8080:8080"
+
+  crawl4ai: # self-hosted scrape/extract (page -> markdown)
+    image: unclecode/crawl4ai:latest # verify/pin
+    container_name: agenthome-crawl4ai
+    restart: unless-stopped
+    shm_size: "1g"
+    ports:
+      - "127.0.0.1:11235:11235"
+
+  qdrant: # vector memory over the vault (semantic recall)
+    image: qdrant/qdrant:latest # verify/pin
+    container_name: agenthome-qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+    ports:
+      - "127.0.0.1:6333:6333"
+
+  dashboard: # Next.js mission control
+    build: ./dashboard
+    container_name: agenthome-dashboard
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_HERMES_URL=http://127.0.0.1:8642
+      - NEXT_PUBLIC_HERMES_WS=ws://127.0.0.1:8642/task_events
+    ports:
+      - "127.0.0.1:3737:3737"
+    depends_on: [hermes]
+
+volumes:
+  hermes_state:
+  qdrant_data:

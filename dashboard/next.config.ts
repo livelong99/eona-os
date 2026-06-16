@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  // Standalone output for a small Docker runtime image.
+  output: "standalone",
 };
 
 export default nextConfig;

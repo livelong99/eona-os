@@ -1,13 +1,11 @@
 // Core domain types for the Agent Home dashboard.
 
-/** Provider tiers, free-first. See docs/architecture.md §4.C. */
-export type Tier = "A" | "B" | "C" | "D";
+/** Provider tiers. Only paid = Claude (D) + Gemini (C); A is optional local. See docs/architecture.md §4.C. */
+export type Tier = "A" | "C" | "D";
 
 export interface TierMeta {
   tier: Tier;
   label: string;
-  /** true = prompts may be logged by the provider (Tier B). */
-  logged: boolean;
   /** allowed to handle sensitive data? */
   sensitiveOk: boolean;
 }

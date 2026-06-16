@@ -13,7 +13,7 @@ Optionally copy `.env.local.example` → `.env.local` to point at a non-default 
 ## What works now
 - Full dark **shell**: `LOCAL · STUDIO` / `Agentic OS` wordmark, three nav groups, gradient agent icons,
   vault chip + gateway live/offline pill.
-- **3 screen archetypes:** Chat (Claude/Gemini/Local + tier/privacy badge), Board (Kanban + live
+- **3 screen archetypes:** Chat (Claude/Gemini/Local + tier badge), Board (Kanban + live
   `task_events` ticker), Graph (Memory "galaxy").
 - **Views:** Mission Control launcher, Prompt Foundry (brief → Google Flow prompt output), Goal Mode.
 - **Offline-first:** `src/lib/hermes.ts` talks to `127.0.0.1:8642`; when the gateway is down it falls back to

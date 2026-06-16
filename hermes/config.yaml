@@ -26,29 +26,17 @@ delegation:
   max_concurrent_children: 8
   max_spawn_depth: 2
 
-# --- Provider mesh (free-first, four tiers) -----------------------------------
-# Tier A = local (free, private) · Tier B = free cloud (logged, transient)
-# Tier C = Gemini (API) · Tier D = Claude Code CLI (runtime, not a model here)
+# --- Provider mesh (three tiers; only paid = Claude sub + Gemini key) ---------
+# Tier A = Ollama (native, free, optional) · Tier C = Gemini (API)
+# Tier D = Claude Code CLI (runtime, not a model here)
+# Hostnames assume the Docker stack: host.docker.internal reaches host-native
+# services (Ollama, Obsidian). When running Hermes natively, use 127.0.0.1.
 providers:
-  # Tier A — local, no key, private. Default for bulk + sensitive data.
+  # Tier A — local, no key, private. Optional (run Ollama native for Metal GPU).
   ollama:
     type: openai_compatible
-    base_url: http://127.0.0.1:11434/v1
-    models: [gemma-4-12b, nemotron-via-ollama]
-
-  # Tier B — free cloud. NON-SENSITIVE ONLY (these log prompts, are transient).
-  openrouter_free:
-    type: openai_compatible
-    base_url: https://openrouter.ai/api/v1
-    api_key_env: OPENROUTER_API_KEY
-    models: [nvidia/nemotron-3-ultra:free]   # verify current free IDs
-    privacy: logged                          # routing guard reads this
-  glm_flash:
-    type: anthropic_compatible
-    base_url: https://api.z.ai/api/anthropic
-    api_key_env: ZAI_API_KEY
-    models: [glm-4-flash]
-    privacy: logged
+    base_url: http://host.docker.internal:11434/v1
+    models: [gemma3, llama3.1]   # verify tags you've pulled: `ollama list`
 
   # Tier C — Gemini. Flash = judge/high-freq; Pro = heavy; Prompt Foundry.
   gemini:
@@ -57,24 +45,35 @@ providers:
     api_key_env: GEMINI_API_KEY
     models: [gemini-flash, gemini-pro]        # verify current IDs in ai.google.dev
 
-  # Tier D (Claude) is a RUNTIME, not a provider model — see scripts/ + the
-  # Claude Code MCP wiring. Hermes reaches it via terminal/CLI delegation.
+  # Tier D (Claude) is a RUNTIME, not a provider model — Hermes reaches it via
+  # terminal/CLI delegation; it shares memory through the Obsidian MCP.
 
 # --- Routing policy -----------------------------------------------------------
-# free-first, judge-gated. Sensitive work NEVER touches `privacy: logged`.
+# cheap-first, judge-gated. No external promo/free-cloud models (dropped).
 routing:
-  order: [ollama, openrouter_free, glm_flash, gemini, claude_code]
+  order: [ollama, gemini, claude_code]   # ollama optional; falls through if absent
   escalate_on: judge_fail
-  sensitive_allow: [ollama, gemini, claude_code]   # privacy guard allowlist
 
-# --- Shared memory (Obsidian) -------------------------------------------------
+# --- Shared memory (Obsidian) + OSS tools (self-hosted Docker) -----------------
 mcp_servers:
   obsidian:
-    # Obsidian Local REST API plugin on :27123, exposed via an Obsidian MCP server.
+    # Obsidian Local REST API plugin on the HOST (:27123).
     # API key stored as MCP_OBSIDIAN_API_KEY in ~/.hermes/.env (Bearer stripped).
-    base_url: http://127.0.0.1:27123
+    base_url: http://host.docker.internal:27123
     api_key_env: MCP_OBSIDIAN_API_KEY
     vault_scope: "10_Projects/agent-home"   # agents never roam the whole vault
+  qdrant:
+    # Vector memory for semantic recall over the vault (Docker service).
+    base_url: http://qdrant:6333
+
+# --- Tools (self-hosted OSS; no paid SaaS). Wire as search/scrape skills. ------
+tools:
+  search:
+    provider: searxng
+    base_url: http://searxng:8080      # JSON format enabled in infra/searxng/settings.yml
+  scrape:
+    provider: crawl4ai
+    base_url: http://crawl4ai:11235
 
 # --- Profiles (= our agents). Personas live in ./profiles/*.md ----------------
 profiles:
