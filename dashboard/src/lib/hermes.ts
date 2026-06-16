@@ -14,12 +14,20 @@ import { MOCK_EVENTS, MOCK_MEMORY, MOCK_TASKS } from "./mock";
 // Same-origin proxy (src/app/api/hermes/[...path]/route.ts) forwards to the
 // engine and attaches the bearer key server-side — no secret in the browser.
 const BASE = "/api/hermes";
-const TIMEOUT_MS = 3000;
+const HEALTH_TIMEOUT_MS = 4000;
+// A claude_code turn runs the real `claude` CLI (loads its system prompt, runs an
+// agent turn) — easily 10–40s. The chat/run calls need a long client timeout or
+// the browser aborts mid-turn and falls back to the offline mock.
+const CHAT_TIMEOUT_MS = 300_000;
 
-async function tryFetch<T>(path: string, init?: RequestInit): Promise<T | null> {
+async function tryFetch<T>(
+  path: string,
+  init?: RequestInit,
+  timeoutMs: number = HEALTH_TIMEOUT_MS,
+): Promise<T | null> {
   try {
     const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), TIMEOUT_MS);
+    const t = setTimeout(() => ctrl.abort(), timeoutMs);
     const res = await fetch(`${BASE}${path}`, { ...init, signal: ctrl.signal });
     clearTimeout(t);
     if (!res.ok) return null;
@@ -56,7 +64,7 @@ export async function sendMessage(
       messages: [{ role: "user", content: text }],
       stream: false,
     }),
-  });
+  }, CHAT_TIMEOUT_MS);
   const content = data?.choices?.[0]?.message?.content;
   if (content) {
     return {
@@ -83,7 +91,7 @@ export async function startRun(
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ input: prompt }),
-  });
+  }, CHAT_TIMEOUT_MS);
   const runId = data?.run_id ?? data?.id ?? null;
   return { runId, live: runId !== null };
 }
