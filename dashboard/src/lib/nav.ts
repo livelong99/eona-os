@@ -1,13 +1,11 @@
-// Sidebar navigation config + agent registry. Mirrors the reference UI
-// (docs/reference/montages/) trimmed to the v1 provider set.
+// Sidebar navigation config + agent registry. Claude is the only runtime
+// (turns delegate to the local `claude` CLI via the claude_code api_mode).
 import type { Agent, Tier, TierMeta } from "./types";
 
 export type ViewId =
   | "mission-control"
   | "kanban"
   | "agent:claude"
-  | "agent:gemini"
-  | "agent:openrouter"
   | "prompt-foundry"
   | "memory"
   | "goal-mode";
@@ -35,8 +33,6 @@ export interface NavGroup {
 
 export const TIERS: Record<Tier, TierMeta> = {
   primary: { tier: "primary", label: "Primary" },
-  fallback: { tier: "fallback", label: "Fallback" },
-  bulk: { tier: "bulk", label: "Bulk" },
 };
 
 export const AGENTS: Record<string, Agent> = {
@@ -46,23 +42,7 @@ export const AGENTS: Record<string, Agent> = {
     gradient: "from-orange-400 to-amber-600",
     tier: "primary",
     model: "claude-code-cli",
-    blurb: "Claude Code CLI (subscription) — primary executor via the bridge.",
-  },
-  gemini: {
-    id: "gemini",
-    name: "Gemini",
-    gradient: "from-violet-400 to-fuchsia-600",
-    tier: "fallback",
-    model: "google/gemini-2.5-flash",
-    blurb: "Google Gemini — fallback + Hermes engine model.",
-  },
-  openrouter: {
-    id: "openrouter",
-    name: "OpenRouter",
-    gradient: "from-sky-400 to-indigo-600",
-    tier: "bulk",
-    model: "openrouter/auto",
-    blurb: "OpenRouter — cheap/bulk tier + last-resort fallback.",
+    blurb: "Claude Code CLI (subscription) — the only executor, via the bridge.",
   },
 };
 
@@ -78,8 +58,6 @@ export const NAV: NavGroup[] = [
     heading: "Agents",
     items: [
       { id: "agent:claude", label: "Claude", icon: "bot", agentId: "claude" },
-      { id: "agent:gemini", label: "Gemini", icon: "bot", agentId: "gemini" },
-      { id: "agent:openrouter", label: "OpenRouter", icon: "bot", agentId: "openrouter" },
     ],
   },
   {

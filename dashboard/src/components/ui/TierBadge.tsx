@@ -1,4 +1,4 @@
-import { Crown, LifeBuoy, Layers } from "lucide-react";
+import { Crown } from "lucide-react";
 import type { Tier } from "@/lib/types";
 import { TIERS } from "@/lib/nav";
 
@@ -8,11 +8,9 @@ interface TierBadgeProps {
 
 const STYLE: Record<Tier, { cls: string; Icon: typeof Crown }> = {
   primary: { cls: "border-amber-500/40 bg-amber-500/10 text-amber-300", Icon: Crown },
-  fallback: { cls: "border-violet-500/40 bg-violet-500/10 text-violet-300", Icon: LifeBuoy },
-  bulk: { cls: "border-sky-500/40 bg-sky-500/10 text-sky-300", Icon: Layers },
 };
 
-/** Shows the provider's role: Primary (Claude) / Fallback (Gemini) / Bulk (OpenRouter). */
+/** Shows the provider's role. Claude is the only runtime, so this is always Primary. */
 export function TierBadge({ tier }: TierBadgeProps) {
   const { cls, Icon } = STYLE[tier];
   return (

@@ -4,24 +4,19 @@
 # After install, reconcile against:  hermes config schema  /  /api/config/schema.
 
 # --- Providers & routing ------------------------------------------------------
-# DEFAULT is Claude (Sonnet/Opus) using your Claude Code SUBSCRIPTION — Hermes
-# natively supports it via CLAUDE_CODE_OAUTH_TOKEN (run `claude setup-token`),
-# so there is NO per-token API cost. Chain:
-#   1. PRIMARY  = Claude Sonnet 4.6 (claude_code subscription)
-#   2. FALLBACK = Gemini  (when Claude is unavailable / rate-limited)
-#   3. BULK / LAST-RESORT = OpenRouter (cheap/free models)
-# No local models (Ollama removed). Set CLAUDE_CODE_OAUTH_TOKEN + GEMINI_API_KEY
-# + OPENROUTER_API_KEY in ~/.hermes/.env. Swap to claude-opus-4-8 for Opus.
+# Claude is the ONLY model/runtime. Turns are delegated to the local `claude`
+# CLI via the "claude_code" runtime (api_mode: claude_code), which uses your
+# Claude Code SUBSCRIPTION (CLAUDE_CODE_OAUTH_TOKEN — run `claude setup-token`),
+# so there is NO per-token API cost. No Gemini, no OpenRouter, no local models.
+# Set CLAUDE_CODE_OAUTH_TOKEN in ~/.hermes/.env. Swap to claude-opus-4-8 for Opus.
+#
+# api_mode defaults to "claude_code" in the engine (gateway/run.py reads the
+# HERMES_API_MODE env var, default "claude_code"). Setting it here makes the
+# Claude-only runtime explicit and is the documented override point.
 model:
   provider: auto # auto-detects claude_code from CLAUDE_CODE_OAUTH_TOKEN
-  default: "anthropic/claude-sonnet-4-6" # primary; or "anthropic/claude-opus-4-8"
-
-# Engine-level fallback chain (tried when the primary errors/rate-limits).
-# Easiest to set interactively: `hermes fallback add` (validates against live models).
-fallback:
-  providers:
-    - "google/gemini-2.5-flash" # fallback when Claude is unavailable
-    - "openrouter/auto" # cheap/last-resort; needs OPENROUTER_API_KEY
+  default: "anthropic/claude-sonnet-4-6" # or "anthropic/claude-opus-4-8"
+  api_mode: claude_code # delegate turns to the local `claude` CLI runtime
 
 # --- Agent behavior -----------------------------------------------------------
 agent:

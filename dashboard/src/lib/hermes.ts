@@ -11,8 +11,10 @@
 import type { MemoryGraph, Message, Task, TaskEvent } from "./types";
 import { MOCK_EVENTS, MOCK_MEMORY, MOCK_TASKS } from "./mock";
 
-const BASE = process.env.NEXT_PUBLIC_HERMES_URL ?? "http://127.0.0.1:8642";
-const TIMEOUT_MS = 1500;
+// Same-origin proxy (src/app/api/hermes/[...path]/route.ts) forwards to the
+// engine and attaches the bearer key server-side — no secret in the browser.
+const BASE = "/api/hermes";
+const TIMEOUT_MS = 3000;
 
 async function tryFetch<T>(path: string, init?: RequestInit): Promise<T | null> {
   try {

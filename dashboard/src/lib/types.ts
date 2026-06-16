@@ -1,7 +1,7 @@
 // Core domain types for the Agent Home dashboard.
 
-/** Provider roles. Claude is primary, Gemini the fallback, OpenRouter the bulk/last-resort tier. */
-export type Tier = "primary" | "fallback" | "bulk";
+/** Provider role. Claude is the only runtime, so there is a single tier. */
+export type Tier = "primary";
 
 export interface TierMeta {
   tier: Tier;
