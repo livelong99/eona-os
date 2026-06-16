@@ -3,7 +3,7 @@
 import { useRef, useState } from "react";
 import { SendHorizontal } from "lucide-react";
 import type { Agent, Message } from "@/lib/types";
-import { sendMessage } from "@/lib/hermes";
+import { sendMessageStream } from "@/lib/hermes";
 import { AgentIcon } from "@/components/ui/AgentIcon";
 import { TierBadge } from "@/components/ui/TierBadge";
 
@@ -26,17 +26,42 @@ export function ChatView({ agent }: ChatViewProps) {
       text,
       ts: Date.now(),
     };
-    setMessages((prev) => [...prev, userMsg]);
+    const replyId = `a-${Date.now()}`;
+    setMessages((prev) => [
+      ...prev,
+      userMsg,
+      { id: replyId, role: "agent", text: "", ts: Date.now() },
+    ]);
     setDraft("");
     setBusy(true);
-    try {
-      const { reply } = await sendMessage(agent.model, text);
-      setMessages((prev) => [...prev, reply]);
-    } finally {
-      setBusy(false);
+    const bump = () =>
       requestAnimationFrame(() =>
         scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }),
       );
+    try {
+      const { live } = await sendMessageStream(agent.model, text, (chunk) => {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === replyId ? { ...m, text: m.text + chunk } : m)),
+        );
+        bump();
+      });
+      if (!live) {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === replyId
+              ? {
+                  ...m,
+                  text:
+                    "(offline) Engine not reachable — is the stack up? " +
+                    "Run scripts/install.sh, then retry.",
+                }
+              : m,
+          ),
+        );
+      }
+    } finally {
+      setBusy(false);
+      bump();
     }
   }
 

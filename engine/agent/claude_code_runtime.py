@@ -92,10 +92,14 @@ class ClaudeCodeSession:
         self._mcp_config_path = path
         return path
 
-    def _build_cmd(self, user_input: str) -> List[str]:
-        cmd = [
-            self.claude_bin, "-p", user_input,
-            "--output-format", "json",
+    def _build_cmd(self, user_input: str, *, stream: bool = False) -> List[str]:
+        cmd = [self.claude_bin, "-p", user_input]
+        if stream:
+            cmd += ["--output-format", "stream-json",
+                    "--include-partial-messages", "--verbose"]
+        else:
+            cmd += ["--output-format", "json"]
+        cmd += [
             "--mcp-config", self._mcp_config(),
             "--allowedTools", self.allowed_tools,
             "--permission-mode", self.permission_mode,
@@ -104,7 +108,11 @@ class ClaudeCodeSession:
             cmd += ["--resume", self.session_id]
         return cmd
 
-    def run_turn(self, *, user_input: str) -> ClaudeTurn:
+    def run_turn(self, *, user_input: str, on_delta=None) -> ClaudeTurn:
+        # Streaming path: emit text deltas live via on_delta (used to feed the
+        # agent's stream_delta_callback → dashboard SSE).
+        if on_delta is not None:
+            return self._run_turn_streaming(user_input=user_input, on_delta=on_delta)
         cmd = self._build_cmd(user_input)
         try:
             proc = subprocess.run(
@@ -146,6 +154,63 @@ class ClaudeCodeSession:
             usage=data.get("usage", {}) or {},
         )
 
+    def _run_turn_streaming(self, *, user_input: str, on_delta) -> ClaudeTurn:
+        """Stream `claude -p --output-format stream-json`, calling on_delta(text)
+        per content_block_delta, and assembling the final ClaudeTurn."""
+        cmd = self._build_cmd(user_input, stream=True)
+        try:
+            proc = subprocess.Popen(
+                cmd, cwd=self.engine_root, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, text=True, bufsize=1,
+            )
+        except FileNotFoundError:
+            return ClaudeTurn(error=f"`{self.claude_bin}` not found on PATH", interrupted=True)
+
+        final_text = ""
+        session_id: Optional[str] = None
+        err: Optional[str] = None
+        try:
+            assert proc.stdout is not None
+            for line in proc.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    o = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                t = o.get("type")
+                if t == "stream_event":
+                    ev = o.get("event", {}) or {}
+                    if ev.get("type") == "content_block_delta":
+                        d = ev.get("delta", {}) or {}
+                        if d.get("type") == "text_delta" and d.get("text"):
+                            try:
+                                on_delta(d["text"])
+                            except Exception:
+                                logger.debug("on_delta raised", exc_info=True)
+                elif t == "result":
+                    final_text = o.get("result", "") or final_text
+                    session_id = o.get("session_id") or session_id
+                    if o.get("is_error"):
+                        err = str(o.get("result") or "claude reported is_error")
+            proc.wait(timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            err = f"claude -p timed out after {self.timeout}s"
+        if err is None and proc.returncode not in (0, None) and not final_text:
+            stderr = (proc.stderr.read() if proc.stderr else "")[:500]
+            err = f"claude exited {proc.returncode}: {stderr.strip()}"
+
+        self.session_id = session_id or self.session_id
+        return ClaudeTurn(
+            final_text=final_text,
+            projected_messages=[{"role": "assistant", "content": final_text}],
+            session_id=self.session_id,
+            error=err,
+            interrupted=err is not None,
+        )
+
     def close(self) -> None:
         if self._mcp_config_path and os.path.exists(self._mcp_config_path):
             try:
@@ -174,8 +239,10 @@ def run_claude_code_turn(
         agent._claude_session = ClaudeCodeSession(cwd=cwd)
 
     # The user message is already appended to `messages` by run_conversation().
+    # Pass the agent's stream callback so deltas flow live to the dashboard SSE.
+    on_delta = getattr(agent, "stream_delta_callback", None)
     try:
-        turn = agent._claude_session.run_turn(user_input=user_message)
+        turn = agent._claude_session.run_turn(user_input=user_message, on_delta=on_delta)
     except Exception as exc:  # noqa: BLE001 — crash → drop session, report partial
         logger.exception("claude_code turn failed")
         try:

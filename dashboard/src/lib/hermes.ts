@@ -83,6 +83,68 @@ export async function sendMessage(
   return { reply, live: false };
 }
 
+/**
+ * Streaming chat: POST stream:true and parse the SSE `chat.completion.chunk`
+ * deltas, calling onDelta(text) per chunk. Returns the full text + live flag.
+ */
+export async function sendMessageStream(
+  agentModel: string,
+  text: string,
+  onDelta: (chunk: string) => void,
+): Promise<{ text: string; live: boolean }> {
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), CHAT_TIMEOUT_MS);
+    const res = await fetch(`${BASE}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: agentModel,
+        stream: true,
+        messages: [{ role: "user", content: text }],
+      }),
+      signal: ctrl.signal,
+    });
+    if (!res.ok || !res.body) {
+      clearTimeout(t);
+      return { text: "", live: false };
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let full = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) {
+        const s = line.trim();
+        if (!s.startsWith("data:")) continue;
+        const payload = s.slice(5).trim();
+        if (payload === "[DONE]") continue;
+        try {
+          const obj = JSON.parse(payload) as ChatCompletion & {
+            choices?: { delta?: { content?: string } }[];
+          };
+          const delta = obj.choices?.[0]?.delta?.content;
+          if (delta) {
+            full += delta;
+            onDelta(delta);
+          }
+        } catch {
+          /* ignore keepalives / partial frames */
+        }
+      }
+    }
+    clearTimeout(t);
+    return { text: full, live: true };
+  } catch {
+    return { text: "", live: false };
+  }
+}
+
 // --- Runs: start an async run and stream its SSE lifecycle events -------------
 export async function startRun(
   prompt: string,
