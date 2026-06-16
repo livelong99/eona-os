@@ -1,24 +1,35 @@
-# Dashboard (`localhost:3737`)
+# Dashboard (`127.0.0.1:3737`)
 
-Next.js + Tailwind command surface over the Hermes gateway. **Phase 3** deliverable — not yet scaffolded.
+Next.js 16 + Tailwind v4 command surface over the Hermes gateway. Phase 3 — **scaffolded and running**.
 
-## Scaffold (when starting Phase 3)
+## Run
 ```bash
-npx create-next-app@latest . --ts --tailwind --app --src-dir --eslint
-# run on the Agent OS convention port:
-npm run dev -- -p 3737
+npm install
+npm run dev      # http://127.0.0.1:3737  (localhost-only by design)
+npm run build    # production build / typecheck / lint
 ```
+Optionally copy `.env.local.example` → `.env.local` to point at a non-default gateway.
 
-## Layout (matches docs/reference/montages/)
-- Dark theme; fixed left sidebar: `LOCAL · STUDIO` / `Agentic OS` wordmark, three groups, gradient agent icons,
-  user/vault chip pinned bottom.
-- **WORKSPACE:** Mission Control · Kanban (board archetype, WebSocket `task_events`).
-- **AGENTS:** Claude (Claude Code panel) · Gemini · Local (Ollama) + free-cloud picker; per-chat tier/privacy
-  badge (flags Tier B "logged").
-- **SELF:** Prompt Foundry · Memory (graph archetype) · Goal Mode.
+## What works now
+- Full dark **shell**: `LOCAL · STUDIO` / `Agentic OS` wordmark, three nav groups, gradient agent icons,
+  vault chip + gateway live/offline pill.
+- **3 screen archetypes:** Chat (Claude/Gemini/Local + tier/privacy badge), Board (Kanban + live
+  `task_events` ticker), Graph (Memory "galaxy").
+- **Views:** Mission Control launcher, Prompt Foundry (brief → Google Flow prompt output), Goal Mode.
+- **Offline-first:** `src/lib/hermes.ts` talks to `127.0.0.1:8642`; when the gateway is down it falls back to
+  clearly-labeled mock data, so the UI is demonstrable before Phase 1 is run.
 
-## Backend
-All data via the Hermes REST/WS API on `127.0.0.1:8642`. No direct provider calls from the browser.
-3 reusable screen archetypes: **Chat**, **Board**, **Graph**.
+## Wire to real Hermes
+The client expects these gateway endpoints (verify/adjust against the installed Hermes API):
+`GET /` (health), `GET /api/kanban/tasks`, `GET /api/memory/graph`, `POST /api/agents/:id/chat`,
+`WS /task_events`. Map them in `src/lib/hermes.ts`.
+
+## Layout / structure
+```
+src/app/        layout, globals (theme), page (shell + view router)
+src/lib/        types, nav (agents + nav config), hermes (client), mock
+src/components/  Sidebar, ui/ (AgentIcon, TierBadge, LivePill, Icon), views/
+```
+Backend rule: all data via the Hermes REST/WS API — no direct provider calls from the browser.
 
 See `../docs/architecture.md` §4.D.
