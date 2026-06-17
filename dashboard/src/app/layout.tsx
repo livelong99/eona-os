@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { MotionConfig } from "framer-motion";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -27,7 +28,11 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full">{children}</body>
+      {/* reducedMotion="user" propagates prefers-reduced-motion to all framer-motion
+          children; no individual component needs its own media query. */}
+      <body className="min-h-full">
+        <MotionConfig reducedMotion="user">{children}</MotionConfig>
+      </body>
     </html>
   );
 }
