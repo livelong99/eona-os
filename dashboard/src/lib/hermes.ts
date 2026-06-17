@@ -181,27 +181,73 @@ export function streamRunEvents(
   return () => es.close();
 }
 
-// --- Kanban + Memory: not on the 8642 API server. Mock until 9119 is wired. ---
+// --- Kanban + Memory: live from the engine's /v1/tasks and /v1/memory --------
+// Falls back to mock data when the engine is unreachable so the dashboard
+// stays demonstrable offline.
+
 export async function getTasks(): Promise<{ tasks: Task[]; live: boolean }> {
-  // TODO: wire to the dashboard backend (:9119) or kanban DB; no REST on :8642.
+  const data = await tryFetch<{ tasks: Task[] }>("/v1/tasks");
+  if (data?.tasks) {
+    return { tasks: data.tasks, live: true };
+  }
   return { tasks: MOCK_TASKS, live: false };
 }
 
 export async function getMemory(): Promise<{ graph: MemoryGraph; live: boolean }> {
-  // TODO: build from the Obsidian MCP graph / Qdrant; no REST graph on :8642.
+  const data = await tryFetch<{ graph: MemoryGraph }>("/v1/memory");
+  if (data?.graph) {
+    return { graph: data.graph, live: true };
+  }
   return { graph: MOCK_MEMORY, live: false };
 }
 
 /**
- * Kanban activity ticker. No global event stream exists on the 8642 API server
- * (per-run SSE only), so this replays mock events until the :9119 WS (/api/ws)
- * is wired. Returns an unsubscribe fn.
+ * Subscribe to the global Kanban event stream (GET /v1/events, SSE).
+ * Falls back to the mock ticker when the engine is unreachable so the
+ * dashboard degrades gracefully. Returns an unsubscribe fn.
  */
 export function subscribeEvents(onEvent: (e: TaskEvent) => void): () => void {
+  // Mock-ticker fallback — used when EventSource errors on first connect.
+  let mockTimer: ReturnType<typeof setInterval> | null = null;
   let i = 0;
-  const timer = setInterval(() => {
-    onEvent({ ...MOCK_EVENTS[i % MOCK_EVENTS.length], id: `me-${i}`, ts: Date.now() });
-    i++;
-  }, 4000);
-  return () => clearInterval(timer);
+  function startMock() {
+    if (mockTimer !== null) return;
+    mockTimer = setInterval(() => {
+      onEvent({ ...MOCK_EVENTS[i % MOCK_EVENTS.length], id: `me-${i}`, ts: Date.now() });
+      i++;
+    }, 4000);
+  }
+
+  let es: EventSource | null = null;
+  try {
+    es = new EventSource(`${BASE}/v1/events`);
+    es.onmessage = (ev) => {
+      try {
+        const raw = JSON.parse(ev.data) as Partial<TaskEvent>;
+        onEvent({
+          id: raw.id ?? `e-${Date.now()}`,
+          taskId: raw.taskId ?? "",
+          kind: raw.kind ?? "event",
+          message: raw.message ?? ev.data.slice(0, 160),
+          ts: raw.ts ?? Date.now(),
+        });
+      } catch {
+        /* ignore keepalive comments and non-JSON frames */
+      }
+    };
+    es.onerror = () => {
+      // Engine unreachable — close SSE and fall back to mock ticker.
+      es?.close();
+      es = null;
+      startMock();
+    };
+  } catch {
+    // EventSource constructor failed (e.g. SSR context) — use mock.
+    startMock();
+  }
+
+  return () => {
+    es?.close();
+    if (mockTimer !== null) clearInterval(mockTimer);
+  };
 }
