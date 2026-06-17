@@ -9,6 +9,23 @@
   --foreground: #e7e9f0;
   --muted: #8a8fa3;
   --accent: #7c5cff;
+
+  /* Obsidian Aurora — color stops */
+  --aurora-violet: #7c5cff;
+  --aurora-teal: #00d4aa;
+  --aurora-indigo: #4f46e5;
+
+  /* Glass surface */
+  --glass-bg: rgba(17, 18, 25, 0.6);
+  --glass-border: rgba(124, 92, 255, 0.18);
+  --glass-blur: 12px;
+
+  /* Film grain */
+  --grain-opacity: 0.035;
+
+  /* Glow */
+  --glow-accent: rgba(124, 92, 255, 0.35);
+  --glow-spread: 0 0 24px var(--glow-accent), 0 0 60px rgba(124, 92, 255, 0.12);
 }
 
 @theme inline {
@@ -21,6 +38,11 @@
   --color-accent: var(--accent);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+
+  /* Aurora tokens as Tailwind utilities */
+  --color-aurora-violet: var(--aurora-violet);
+  --color-aurora-teal: var(--aurora-teal);
+  --color-aurora-indigo: var(--aurora-indigo);
 }
 
 html,
@@ -46,6 +68,33 @@ body {
 *::-webkit-scrollbar-thumb {
   background: var(--border);
   border-radius: 9999px;
+}
+
+/* Aurora drift — slow sinusoidal translate + hue-rotate for the background field.
+   prefers-reduced-motion kills the animation entirely; static gradient remains. */
+@keyframes aurora-drift {
+  0% {
+    transform: translate(0%, 0%) scale(1);
+    filter: blur(72px) hue-rotate(0deg);
+  }
+  33% {
+    transform: translate(4%, -6%) scale(1.06);
+    filter: blur(80px) hue-rotate(20deg);
+  }
+  66% {
+    transform: translate(-5%, 4%) scale(0.96);
+    filter: blur(64px) hue-rotate(-15deg);
+  }
+  100% {
+    transform: translate(0%, 0%) scale(1);
+    filter: blur(72px) hue-rotate(0deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aurora-orb {
+    animation: none !important;
+  }
 }
 
 @keyframes pulse-dot {
