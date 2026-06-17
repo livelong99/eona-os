@@ -11,8 +11,12 @@ keep working inside a Claude turn.
 Invoked from ``run_conversation()`` when ``agent.api_mode == "claude_code"``.
 Returns the same dict shape as the chat_completions / codex paths.
 
-MVP: non-streaming (``--output-format json``). Streaming (``stream-json`` + an
-event projector) is a follow-up; see references next to the codex projector.
+Streaming path (``stream-json`` + RunEvent projector):
+  ``_run_turn_streaming`` consumes the full ``--output-format stream-json`` output
+  and projects every event into canonical ``RunEvent`` dicts (see
+  ``engine/agent/run_events.py``), forwarding them via the ``on_event`` callback.
+  Unknown event types produce a generic trace chip — they never crash. The
+  ``on_delta`` callback is preserved for backwards-compatible text streaming.
 """
 from __future__ import annotations
 
@@ -21,8 +25,11 @@ import logging
 import os
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
+
+from agent.run_events import RUN_EVENT_KINDS, make_event
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +40,11 @@ _KANBAN_ENV_KEYS = (
     "HERMES_KANBAN_CLAIM_LOCK", "HERMES_KANBAN_DB", "HERMES_KANBAN_BOARD",
     "HERMES_HOME",
 )
+
+# Tools whose tool_use input carries file-edit semantics: path + old/new string.
+_DIFF_TOOLS = frozenset({"Edit", "Write", "MultiEdit"})
+# Max length for a generic trace chip preview to avoid flooding the SSE queue.
+_TRACE_PREVIEW_MAX = 120
 
 
 @dataclass
@@ -45,6 +57,368 @@ class ClaudeTurn:
     error: Optional[str] = None
     session_id: Optional[str] = None
     usage: Dict[str, Any] = field(default_factory=dict)
+
+
+def _safe_call(cb: Optional[Callable], *args: Any, label: str = "callback") -> None:
+    """Call cb(*args), swallowing any exception so the stream loop never crashes."""
+    if cb is None:
+        return
+    try:
+        cb(*args)
+    except Exception:
+        logger.debug("%s raised", label, exc_info=True)
+
+
+def _make_patch(tool_input: Dict[str, Any]) -> str:
+    """Build a pseudo unified-diff patch from an Edit/Write tool_use input.
+
+    Uses ``old_string`` / ``new_string`` for Edit, and treats a Write as
+    replacing the entire file (old = "", new = content).  Returns an empty
+    string when neither field is present so callers can still emit the diff
+    event with just a path.
+    """
+    try:
+        path = tool_input.get("path") or tool_input.get("file_path") or "unknown"
+        old = tool_input.get("old_string", "") or ""
+        new = tool_input.get("new_string", "") or tool_input.get("content", "") or ""
+        if not old and not new:
+            return ""
+        old_lines = old.splitlines(keepends=True)
+        new_lines = new.splitlines(keepends=True)
+        # Minimal unified-diff header; no line-number offsets (dashboard only needs
+        # the +/- lines for syntax-highlighted display, not git-apply precision).
+        header = f"--- a/{path}\n+++ b/{path}\n@@ ... @@\n"
+        body = "".join(f"-{l}" for l in old_lines) + "".join(f"+{l}" for l in new_lines)
+        return header + body
+    except Exception:
+        logger.debug("_make_patch raised", exc_info=True)
+        return ""
+
+
+class _StreamProjector:
+    """Stateful projector that turns raw stream-json objects into RunEvents.
+
+    Lives for one ``_run_turn_streaming`` call.  All state (pending tool_use
+    blocks, reasoning accumulator, subagent flag) is isolated per-turn.
+    """
+
+    def __init__(self, run_id: str, on_event: Callable) -> None:
+        self._run_id = run_id
+        self._on_event = on_event
+        # tool_use_id → {name, input_acc, start_ts}
+        self._pending_tools: Dict[str, Dict[str, Any]] = {}
+        # tool_use_id of the current streaming block (partial input accumulation)
+        self._active_block_id: Optional[str] = None
+        self._active_block_name: Optional[str] = None
+        self._active_input_acc: str = ""
+        # reasoning/thinking accumulator
+        self._reasoning_acc: str = ""
+        # subagent identity seen in this turn
+        self._is_subagent: bool = False
+        self._parent_tool_use_id: Optional[str] = None
+        self._subagent_type: Optional[str] = None
+        self._subagent_started: bool = False
+
+    def _emit(self, kind: str, **fields: Any) -> None:
+        """Emit a RunEvent; unknown kinds fall back to a generic trace chip."""
+        if kind not in RUN_EVENT_KINDS:
+            # Unknown kind: downgrade to tool.started trace chip (never crash).
+            logger.debug("_StreamProjector: unknown kind %r, downgrading to trace", kind)
+            fields = {"tool": "trace", "preview": fields.get("preview", kind)[:_TRACE_PREVIEW_MAX]}
+            kind = "tool.started"
+        ev = make_event(kind, self._run_id, timestamp=time.time(), **fields)  # type: ignore[arg-type]
+        _safe_call(self._on_event, ev, label="on_event")
+
+    # ------------------------------------------------------------------ #
+    # Top-level stream-json object dispatch                                #
+    # ------------------------------------------------------------------ #
+
+    def handle(self, o: Dict[str, Any]) -> None:
+        """Process one parsed stream-json line object."""
+        # ST-5: detect subagent identity from any top-level object.
+        self._detect_subagent(o)
+
+        t = o.get("type")
+        try:
+            if t == "system":
+                self._handle_system(o)
+            elif t == "stream_event":
+                self._handle_stream_event(o.get("event", {}) or {})
+            elif t == "result":
+                self._handle_result(o)
+            else:
+                # ST-7: unknown top-level type → generic trace chip.
+                if t is not None:
+                    self._emit_trace(o, label=f"unknown:{t}")
+        except Exception:
+            # Defensive: never let projector bugs crash the stream loop.
+            logger.debug("_StreamProjector.handle raised for type=%r", t, exc_info=True)
+
+    # ------------------------------------------------------------------ #
+    # ST-5: subagent identity                                             #
+    # ------------------------------------------------------------------ #
+
+    def _detect_subagent(self, o: Dict[str, Any]) -> None:
+        if not o.get("is_subagent"):
+            return
+        self._is_subagent = True
+        self._parent_tool_use_id = o.get("parent_tool_use_id")
+        self._subagent_type = o.get("subagent_type") or ""
+        if not self._subagent_started:
+            self._subagent_started = True
+            # Use subagent_type as span_id fallback until session_id is known.
+            self._emit(
+                "subagent.started",
+                span_id=self._subagent_type or "subagent",
+                parent_tool_use_id=self._parent_tool_use_id,
+                subagent_type=self._subagent_type,
+            )
+
+    # ------------------------------------------------------------------ #
+    # ST-2: system/init → run.header                                      #
+    # ------------------------------------------------------------------ #
+
+    def _handle_system(self, o: Dict[str, Any]) -> None:
+        subtype = o.get("subtype") or o.get("event_type") or ""
+        if subtype == "init":
+            tools: List[str] = []
+            mcp_servers: List[str] = []
+            try:
+                tools = [t.get("name", "") for t in (o.get("tools") or []) if isinstance(t, dict)]
+                mcp_servers = list(o.get("mcp_servers") or [])
+            except Exception:
+                pass
+            self._emit(
+                "run.header",
+                model=str(o.get("model") or ""),
+                tools=tools,
+                mcp_servers=mcp_servers,
+            )
+        else:
+            # Other system events (api_retry, etc.) → trace chip.
+            self._emit_trace(o, label=f"system:{subtype}")
+
+    # ------------------------------------------------------------------ #
+    # stream_event dispatch                                                #
+    # ------------------------------------------------------------------ #
+
+    def _handle_stream_event(self, ev: Dict[str, Any]) -> None:
+        ev_type = ev.get("type") or ""
+        if ev_type == "content_block_start":
+            self._handle_block_start(ev)
+        elif ev_type == "content_block_delta":
+            self._handle_block_delta(ev)
+        elif ev_type == "content_block_stop":
+            self._handle_block_stop(ev)
+        elif ev_type == "message_start":
+            pass  # no RunEvent for message envelope open
+        elif ev_type == "message_delta":
+            pass  # stop_reason etc.; not projected
+        elif ev_type == "message_stop":
+            pass  # no RunEvent for message envelope close
+        # Any other stream event → trace chip.
+        elif ev_type:
+            self._emit_trace(ev, label=f"stream:{ev_type}")
+
+    # ------------------------------------------------------------------ #
+    # ST-3: tool_use block accumulation → tool.started                    #
+    # ------------------------------------------------------------------ #
+
+    def _handle_block_start(self, ev: Dict[str, Any]) -> None:
+        block = ev.get("content_block") or {}
+        btype = block.get("type") or ""
+        if btype == "tool_use":
+            bid = block.get("id") or ""
+            bname = block.get("name") or ""
+            self._active_block_id = bid
+            self._active_block_name = bname
+            self._active_input_acc = ""
+            # Record start timestamp so tool.completed can report duration.
+            self._pending_tools[bid] = {
+                "name": bname,
+                "input_acc": "",
+                "start_ts": time.time(),
+            }
+        elif btype == "thinking":
+            # Thinking block start: reset accumulator.
+            self._reasoning_acc = ""
+
+    def _handle_block_delta(self, ev: Dict[str, Any]) -> None:
+        delta = ev.get("delta") or {}
+        dtype = delta.get("type") or ""
+
+        if dtype == "text_delta":
+            # Handled by the outer loop via on_delta; nothing extra here.
+            pass
+
+        elif dtype == "input_json_delta":
+            # ST-3: accumulate tool_use input JSON fragment.
+            if self._active_block_id and self._active_block_id in self._pending_tools:
+                fragment = delta.get("partial_json") or ""
+                self._pending_tools[self._active_block_id]["input_acc"] += fragment
+
+        elif dtype == "thinking_delta":
+            # ST-6: accumulate reasoning/thinking text.
+            self._reasoning_acc += delta.get("thinking") or ""
+
+        elif dtype == "signature_delta":
+            pass  # thinking block signature; not projected
+
+        # Any other delta type → trace chip.
+        elif dtype:
+            self._emit_trace(delta, label=f"delta:{dtype}")
+
+    def _handle_block_stop(self, ev: Dict[str, Any]) -> None:
+        # Finalise whatever block was open.
+        bid = self._active_block_id
+        bname = self._active_block_name
+
+        # ST-6: flush reasoning if we were accumulating thinking.
+        if self._reasoning_acc:
+            self._emit("reasoning.available", text=self._reasoning_acc)
+            self._reasoning_acc = ""
+
+        if bid and bid in self._pending_tools:
+            entry = self._pending_tools[bid]
+            name = entry.get("name") or bname or ""
+            raw_input = entry.get("input_acc") or ""
+
+            # Parse the accumulated input JSON (defensive).
+            tool_input: Dict[str, Any] = {}
+            try:
+                tool_input = json.loads(raw_input) if raw_input.strip() else {}
+            except json.JSONDecodeError:
+                pass
+            entry["tool_input"] = tool_input
+
+            # Build a human-readable preview.
+            preview = _tool_preview(name, tool_input)
+            self._emit("tool.started", tool=name, preview=preview)
+
+        self._active_block_id = None
+        self._active_block_name = None
+        self._active_input_acc = ""
+
+    # ------------------------------------------------------------------ #
+    # ST-4: tool_result → tool.completed + diff/terminal                  #
+    # ------------------------------------------------------------------ #
+
+    def _handle_result(self, o: Dict[str, Any]) -> None:
+        """Top-level ``result`` object: turn end. Also handles tool_result
+        blocks embedded in assistant/user message arrays when present."""
+        # tool_result blocks appear inside the messages list, not as a
+        # separate top-level type in stream-json — but the ``result``
+        # object itself signals turn end and contains the session_id/usage.
+        # We flush any un-completed tool tracking here with a synthetic
+        # tool.completed so the dashboard trace never has hanging starts.
+        for bid, entry in list(self._pending_tools.items()):
+            if "tool_input" not in entry:
+                # Block stop never arrived — flush defensively.
+                self._pending_tools.pop(bid, None)
+                continue
+            self._finalize_tool(bid, entry, is_error=False, result_content="")
+
+        # ST-5: subagent.completed on turn end.
+        if self._is_subagent and self._subagent_started:
+            self._emit(
+                "subagent.completed",
+                span_id=self._subagent_type or "subagent",
+                parent_tool_use_id=self._parent_tool_use_id,
+                subagent_type=self._subagent_type or "",
+            )
+
+    def handle_tool_result_block(self, block: Dict[str, Any]) -> None:
+        """Called when a ``tool_result`` content block is encountered inside
+        a user-turn message in the stream.  This is the canonical completion
+        signal for a tool_use block.
+        """
+        bid = block.get("tool_use_id") or ""
+        is_error = bool(block.get("is_error"))
+        content = block.get("content") or ""
+        if isinstance(content, list):
+            # Flatten text blocks.
+            content = "".join(
+                c.get("text", "") for c in content if isinstance(c, dict)
+            )
+        entry = self._pending_tools.pop(bid, None)
+        if entry is None:
+            return
+        self._finalize_tool(bid, entry, is_error=is_error, result_content=str(content))
+
+    def _finalize_tool(
+        self,
+        bid: str,
+        entry: Dict[str, Any],
+        *,
+        is_error: bool,
+        result_content: str,
+    ) -> None:
+        """Emit tool.completed + (diff | terminal) for one completed tool call."""
+        name = entry.get("name") or ""
+        start_ts = entry.get("start_ts") or time.time()
+        duration = round(time.time() - start_ts, 3)
+        tool_input: Dict[str, Any] = entry.get("tool_input") or {}
+
+        self._emit(
+            "tool.completed",
+            tool=name,
+            duration=duration,
+            error=is_error,
+            preview=_tool_preview(name, tool_input),
+        )
+
+        if name in _DIFF_TOOLS:
+            # ST-4: emit diff event with pseudo unified patch.
+            path = (
+                tool_input.get("path")
+                or tool_input.get("file_path")
+                or ""
+            )
+            patch = _make_patch(tool_input)
+            if path:
+                self._emit("diff", path=path, patch=patch)
+
+        elif name == "Bash":
+            # ST-4: emit terminal event with the command output.
+            if result_content:
+                self._emit("terminal", text=result_content)
+
+    # ------------------------------------------------------------------ #
+    # ST-7: generic trace chip for unknown events                          #
+    # ------------------------------------------------------------------ #
+
+    def _emit_trace(self, obj: Any, *, label: str = "trace") -> None:
+        try:
+            preview = str(obj)[:_TRACE_PREVIEW_MAX]
+        except Exception:
+            preview = label
+        self._emit("tool.started", tool="trace", preview=preview)
+
+
+def _tool_preview(name: str, tool_input: Dict[str, Any]) -> str:
+    """Generate a short human-readable preview for a tool call."""
+    try:
+        if name in _DIFF_TOOLS:
+            path = tool_input.get("path") or tool_input.get("file_path") or ""
+            return f"{name} {path}" if path else name
+        if name == "Bash":
+            cmd = tool_input.get("command") or ""
+            return f"$ {cmd[:80]}" if cmd else "Bash"
+        if name in ("Read", "Grep", "Glob"):
+            target = (
+                tool_input.get("file_path")
+                or tool_input.get("pattern")
+                or tool_input.get("path")
+                or ""
+            )
+            return f"{name} {target[:60]}" if target else name
+        # Generic: first string value found.
+        for v in tool_input.values():
+            if isinstance(v, str) and v:
+                return f"{name}: {v[:60]}"
+        return name
+    except Exception:
+        return name
 
 
 class ClaudeCodeSession:
@@ -108,11 +482,19 @@ class ClaudeCodeSession:
             cmd += ["--resume", self.session_id]
         return cmd
 
-    def run_turn(self, *, user_input: str, on_delta=None) -> ClaudeTurn:
-        # Streaming path: emit text deltas live via on_delta (used to feed the
-        # agent's stream_delta_callback → dashboard SSE).
-        if on_delta is not None:
-            return self._run_turn_streaming(user_input=user_input, on_delta=on_delta)
+    # ST-1: on_event added alongside on_delta.
+    def run_turn(self, *, user_input: str, on_delta=None, on_event=None) -> ClaudeTurn:
+        """Run one turn.
+
+        ``on_delta(text)`` is called per text_delta (backwards-compat streaming).
+        ``on_event(run_event_dict)`` is called per projected RunEvent — the richer
+        signal the dashboard Glass Cockpit and Trust Rail consume.
+        """
+        # Streaming path: use when either callback is wired up.
+        if on_delta is not None or on_event is not None:
+            return self._run_turn_streaming(
+                user_input=user_input, on_delta=on_delta, on_event=on_event
+            )
         cmd = self._build_cmd(user_input)
         try:
             proc = subprocess.run(
@@ -154,9 +536,27 @@ class ClaudeCodeSession:
             usage=data.get("usage", {}) or {},
         )
 
-    def _run_turn_streaming(self, *, user_input: str, on_delta) -> ClaudeTurn:
-        """Stream `claude -p --output-format stream-json`, calling on_delta(text)
-        per content_block_delta, and assembling the final ClaudeTurn."""
+    def _run_turn_streaming(
+        self,
+        *,
+        user_input: str,
+        on_delta: Optional[Callable],
+        on_event: Optional[Callable],
+    ) -> ClaudeTurn:
+        """Stream ``claude -p --output-format stream-json``.
+
+        Calls ``on_delta(text)`` per text_delta for backwards-compatible live
+        text streaming.  Calls ``on_event(RunEvent)`` per projected RunEvent for
+        the full Glass Cockpit trace (tool_use, tool_result, diff, terminal,
+        subagent spans, run.header, reasoning).
+
+        A ``_StreamProjector`` handles all RunEvent construction; this method
+        only drives the line-by-line stdio loop and assembles the ClaudeTurn.
+        """
+        # Require a run_id for RunEvents; use a sentinel when on_event is absent.
+        run_id = getattr(on_event, "_run_id", None) or "local"
+        projector = _StreamProjector(run_id=run_id, on_event=on_event) if on_event else None
+
         cmd = self._build_cmd(user_input, stream=True)
         try:
             proc = subprocess.Popen(
@@ -179,21 +579,36 @@ class ClaudeCodeSession:
                     o = json.loads(line)
                 except json.JSONDecodeError:
                     continue
+
                 t = o.get("type")
+
+                # --- text_delta: call on_delta for backwards-compat streaming ---
                 if t == "stream_event":
                     ev = o.get("event", {}) or {}
                     if ev.get("type") == "content_block_delta":
                         d = ev.get("delta", {}) or {}
                         if d.get("type") == "text_delta" and d.get("text"):
-                            try:
-                                on_delta(d["text"])
-                            except Exception:
-                                logger.debug("on_delta raised", exc_info=True)
-                elif t == "result":
+                            _safe_call(on_delta, d["text"], label="on_delta")
+
+                # --- tool_result blocks in user-turn messages ---
+                if t == "stream_event":
+                    ev = o.get("event", {}) or {}
+                    if ev.get("type") == "content_block_start" and projector:
+                        block = ev.get("content_block") or {}
+                        if block.get("type") == "tool_result":
+                            projector.handle_tool_result_block(block)
+
+                # --- result: turn end, capture session_id/usage ---
+                if t == "result":
                     final_text = o.get("result", "") or final_text
                     session_id = o.get("session_id") or session_id
                     if o.get("is_error"):
                         err = str(o.get("result") or "claude reported is_error")
+
+                # --- project everything into RunEvents ---
+                if projector is not None:
+                    projector.handle(o)
+
             proc.wait(timeout=self.timeout)
         except subprocess.TimeoutExpired:
             proc.kill()
@@ -239,10 +654,14 @@ def run_claude_code_turn(
         agent._claude_session = ClaudeCodeSession(cwd=cwd)
 
     # The user message is already appended to `messages` by run_conversation().
-    # Pass the agent's stream callback so deltas flow live to the dashboard SSE.
+    # Pass both stream callbacks so deltas and rich RunEvents flow to the dashboard SSE.
     on_delta = getattr(agent, "stream_delta_callback", None)
+    # ST-1: also wire the run_event_callback (set by api_server._make_run_event_callback).
+    on_event = getattr(agent, "run_event_callback", None)
     try:
-        turn = agent._claude_session.run_turn(user_input=user_message, on_delta=on_delta)
+        turn = agent._claude_session.run_turn(
+            user_input=user_message, on_delta=on_delta, on_event=on_event
+        )
     except Exception as exc:  # noqa: BLE001 — crash → drop session, report partial
         logger.exception("claude_code turn failed")
         try:

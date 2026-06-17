@@ -3704,7 +3704,17 @@ class APIServerAdapter(BasePlatformAdapter):
         return current
 
     def _make_run_event_callback(self, run_id: str, loop: "asyncio.AbstractEventLoop"):
-        """Return a tool_progress_callback that pushes structured events to the run's SSE queue."""
+        """Return (tool_progress_cb, on_event_cb) — both push to the run's SSE queue.
+
+        ``tool_progress_cb`` is the legacy ``tool_progress_callback`` signature
+        (event_type, tool_name, preview, …) used by non-claude_code paths.
+
+        ``on_event_cb`` accepts a fully-formed RunEvent dict emitted by the
+        ``_StreamProjector`` in ``claude_code_runtime._run_turn_streaming`` — this
+        is the richer path that carries diff, terminal, subagent, and run.header
+        events the legacy callback cannot express.  Both callbacks push to the
+        same asyncio queue so the SSE stream sees a unified event sequence.
+        """
         def _push(event: Dict[str, Any]) -> None:
             self._set_run_status(
                 run_id,
@@ -3719,7 +3729,8 @@ class APIServerAdapter(BasePlatformAdapter):
             except Exception:
                 pass
 
-        def _callback(event_type: str, tool_name: str = None, preview: str = None, args=None, **kwargs):
+        # Legacy tool_progress_callback used by non-streaming / non-claude_code paths.
+        def _tool_progress_cb(event_type: str, tool_name: str = None, preview: str = None, args=None, **kwargs):
             ts = time.time()
             if event_type == "tool.started":
                 _push({
@@ -3747,7 +3758,25 @@ class APIServerAdapter(BasePlatformAdapter):
                 })
             # _thinking and subagent_progress are intentionally not forwarded
 
-        return _callback
+        # ST-8: on_event_cb — accepts a fully-formed RunEvent dict from the
+        # _StreamProjector.  Unknown/malformed events are logged and dropped
+        # (never crash the SSE loop).  Attach run_id as an attribute so the
+        # runtime's _StreamProjector can read it without an extra argument.
+        def _on_event_cb(event: Dict[str, Any]) -> None:
+            if not isinstance(event, dict):
+                return
+            kind = event.get("event")
+            if not kind:
+                return
+            try:
+                _push(event)
+            except Exception:
+                logger.debug("[api_server] on_event_cb push failed for kind=%r", kind, exc_info=True)
+
+        # Tag with run_id so _StreamProjector can pick it up via getattr.
+        _on_event_cb._run_id = run_id  # type: ignore[attr-defined]
+
+        return _tool_progress_cb, _on_event_cb
 
     async def _handle_runs(self, request: "web.Request") -> "web.Response":
         """POST /v1/runs — start an agent run, return run_id immediately."""
@@ -3838,7 +3867,8 @@ class APIServerAdapter(BasePlatformAdapter):
         self._run_streams_created[run_id] = created_at
         self._run_approval_sessions[run_id] = approval_session_key
 
-        event_cb = self._make_run_event_callback(run_id, loop)
+        # ST-8: unpack both callbacks from the updated _make_run_event_callback.
+        event_cb, on_event_cb = self._make_run_event_callback(run_id, loop)
 
         # Also wire stream_delta_callback so message.delta events flow through.
         def _text_cb(delta: Optional[str]) -> None:
@@ -3854,13 +3884,28 @@ class APIServerAdapter(BasePlatformAdapter):
             except Exception:
                 pass
 
+        run_model = body.get("model", self._model_name) or ""
         self._set_run_status(
             run_id,
             "queued",
             created_at=created_at,
             session_id=session_id,
-            model=body.get("model", self._model_name),
+            model=run_model,
         )
+
+        # ST-9: emit run.header immediately so the dashboard has a header chip
+        # before the first stream byte arrives from the executor thread.
+        try:
+            loop.call_soon_threadsafe(q.put_nowait, {
+                "event": "run.header",
+                "run_id": run_id,
+                "timestamp": time.time(),
+                "model": run_model,
+                "tools": [],
+                "mcp_servers": [],
+            })
+        except Exception:
+            pass
 
         async def _run_and_close():
             try:
@@ -3873,6 +3918,9 @@ class APIServerAdapter(BasePlatformAdapter):
                     gateway_session_key=gateway_session_key,
                 )
                 self._active_run_agents[run_id] = agent
+                # ST-8: wire the rich RunEvent callback so claude_code_runtime
+                # can project tool_use/tool_result/subagent/diff/terminal events.
+                agent.run_event_callback = on_event_cb
 
                 def _approval_notify(approval_data: Dict[str, Any]) -> None:
                     event = dict(approval_data or {})
