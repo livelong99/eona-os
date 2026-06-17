@@ -1,0 +1,81 @@
+# Brand Maker (Forge) — tracked test fixture
+# Mirror of .claude/skills/gds-agent-brand-maker/tool.yaml.
+# .claude/skills/ is gitignored, so this fixture keeps the test suite green
+# in a fresh checkout.  Keep in sync with the real tool.yaml beside the skill.
+tool: brand-maker
+title: Brand Maker (Forge)
+description: >
+  Mockup-first brand identity creator. Runs an anti-cliché creative pipeline —
+  deconstruct the brand, spar on breakthrough metaphors, design interactive HTML
+  logo mockups the user finalizes, then write model-tuned image prompts and
+  marketing-video prompts. Delivers Google Flow-ready packets for every asset.
+
+launch:
+  skill: gds-agent-brand-maker
+  session: per-tool
+
+inputs:
+  - id: brand
+    label: "Brand / product name"
+    type: text
+    required: true
+  - id: brief_docs
+    label: "Brand / product docs (optional)"
+    type: file[]
+    required: false
+  - id: color_refs
+    label: "Color references (optional)"
+    type: file[]
+    required: false
+
+steps:
+  - id: stage0
+    title: "Brand Intake Q&A"
+    ref: references/0-brand-intake.md
+    hitl: true
+    artifacts: []
+    ui: chat
+
+  - id: stage1
+    title: "Deconstruction & Anti-Bias"
+    ref: references/1-deconstruct-antibias.md
+    hitl: true
+    artifacts: ["deconstruct-antibias.md"]
+    ui: chat
+
+  - id: stage2
+    title: "Domain Shifting & Sparring"
+    ref: references/2-domain-shift-spar.md
+    hitl: true
+    artifacts: ["domain-shift-spar.md"]
+    ui: chat
+
+  - id: stage3
+    title: "HTML Mockup Studio"
+    ref: references/3-html-mockup-studio.md
+    hitl: true
+    artifacts: ["mockup.html", "design-brief.md"]
+    ui: artifact-iframe
+
+  - id: stage4
+    title: "Image Prompt Generation"
+    ref: references/4-image-prompts.md
+    hitl: false
+    artifacts: ["*.md"]
+    ui: file-cards
+
+  - id: stage5
+    title: "Marketing Campaign Video"
+    ref: references/5-marketing-video.md
+    hitl: false
+    artifacts: ["video-prompt.md"]
+    ui: file-cards
+
+artifacts_root: "{project}/resources/branding/Brands/{brand}/"
+
+brain:
+  reads:
+    - preference-spine
+    - reasoningbank
+  writes:
+    - "10_Projects/{brand}/"
