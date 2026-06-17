@@ -10,7 +10,10 @@ Matches OpenClaw's 9-tool MCP channel bridge surface:
   events_poll, events_wait, messages_send, permissions_list_open,
   permissions_respond
 
-Plus: channels_list (Hermes-specific extra)
+Plus Hermes-specific extras:
+  channels_list (messaging targets), and the Mission-Control-as-MCP
+  life-state tools — kanban_list, kanban_get, goal_get, memory_read (read),
+  and memory_note (write, routed through the memory write-gate).
 
 Usage:
     hermes mcp serve
@@ -855,6 +858,221 @@ def create_mcp_server(event_bridge: Optional[EventBridge] = None) -> "FastMCP":
 
         result = bridge.respond_to_approval(id, decision)
         return json.dumps(result, indent=2)
+
+    # ----------------------------------------------------------------------
+    # Mission-Control-as-MCP — life-state tools (L2 Presence, arch §4.3)
+    # ----------------------------------------------------------------------
+    # Expose Hermes life-state (kanban, goal, memory) so an external agent
+    # (Claude Code / Cursor) can read the same mind. Per the architecture
+    # contract: READ tools are exposed freely; the single WRITE tool
+    # (memory_note) routes through the existing memory write-gate — the L1
+    # trust hook point — so it cannot silently mutate the brain.
+    # All wrapped imports are lazy so a missing optional dep degrades to a
+    # clean JSON error instead of breaking the whole MCP server at import.
+
+    # -- kanban_list (read) ------------------------------------------------
+
+    @mcp.tool()
+    def kanban_list(
+        status: Optional[str] = None,
+        assignee: Optional[str] = None,
+        board: Optional[str] = None,
+        limit: int = 50,
+    ) -> str:
+        """List Hermes Kanban tasks (read-only life-state).
+
+        Returns tasks with id, title, status, assignee, priority, and
+        timestamps. This is the same board the gateway, dashboard, and Goal
+        Mode dispatch run against.
+
+        Args:
+            status: Filter by status (e.g. todo, in_progress, done, archived)
+            assignee: Filter by assignee/profile name
+            board: Board name (defaults to the current board)
+            limit: Maximum number of tasks to return (default 50)
+        """
+        limit = _coerce_int(limit, default=50, minimum=1, maximum=500)
+        try:
+            from dataclasses import asdict
+            from hermes_cli import kanban_db as kb
+        except ImportError as e:
+            return json.dumps({"error": f"Kanban unavailable: {e}"})
+
+        try:
+            with kb.connect_closing(board=board) as conn:
+                tasks = kb.list_tasks(
+                    conn,
+                    assignee=assignee,
+                    status=status,
+                    limit=limit,
+                )
+            return json.dumps({
+                "count": len(tasks),
+                "board": board or "current",
+                "tasks": [asdict(t) for t in tasks],
+            }, indent=2, default=str)
+        except ValueError as e:
+            # list_tasks raises ValueError on invalid status/order_by.
+            return json.dumps({"error": f"Invalid filter: {e}"})
+        except Exception as e:
+            return json.dumps({"error": f"Failed to list tasks: {e}"})
+
+    # -- kanban_get (read) -------------------------------------------------
+
+    @mcp.tool()
+    def kanban_get(
+        task_id: str,
+        board: Optional[str] = None,
+    ) -> str:
+        """Get one Kanban task by id (read-only life-state).
+
+        Args:
+            task_id: The task id from kanban_list
+            board: Board name (defaults to the current board)
+        """
+        if not task_id:
+            return json.dumps({"error": "task_id is required"})
+        try:
+            from dataclasses import asdict
+            from hermes_cli import kanban_db as kb
+        except ImportError as e:
+            return json.dumps({"error": f"Kanban unavailable: {e}"})
+
+        try:
+            with kb.connect_closing(board=board) as conn:
+                task = kb.get_task(conn, task_id)
+            if task is None:
+                return json.dumps({"error": f"Task not found: {task_id}"})
+            return json.dumps(asdict(task), indent=2, default=str)
+        except Exception as e:
+            return json.dumps({"error": f"Failed to read task: {e}"})
+
+    # -- goal_get (read) ---------------------------------------------------
+
+    @mcp.tool()
+    def goal_get(session_id: str) -> str:
+        """Get the active Goal Mode state for a session (read-only life-state).
+
+        Goal state is stored per session (keyed ``goal:<session_id>``), so
+        pass the Hermes session_id whose standing goal you want — e.g. a
+        session_id seen in conversations_list / conversation_get.
+
+        Returns the goal text, status, turn budget (turns_used / max_turns),
+        last judge verdict, and any user-added subgoals.
+
+        Args:
+            session_id: The Hermes session id to inspect
+        """
+        if not session_id:
+            return json.dumps({"error": "session_id is required"})
+        try:
+            from dataclasses import asdict
+            from hermes_cli.goals import load_goal
+        except ImportError as e:
+            return json.dumps({"error": f"Goal Mode unavailable: {e}"})
+
+        try:
+            state = load_goal(session_id)
+        except Exception as e:
+            return json.dumps({"error": f"Failed to load goal: {e}"})
+
+        if state is None:
+            return json.dumps({
+                "session_id": session_id,
+                "has_goal": False,
+                "goal": None,
+            }, indent=2)
+        return json.dumps({
+            "session_id": session_id,
+            "has_goal": True,
+            **asdict(state),
+        }, indent=2, default=str)
+
+    # -- memory_read (read) ------------------------------------------------
+
+    @mcp.tool()
+    def memory_read(target: str = "memory") -> str:
+        """Read the agent's persistent memory or user profile (read-only).
+
+        Returns the raw text of MEMORY.md (long-term agent memory) or
+        USER.md (the learned user profile) — the same files injected into
+        the agent's system prompt.
+
+        Args:
+            target: "memory" (MEMORY.md) or "user" (USER.md). Default "memory".
+        """
+        if target not in {"memory", "user"}:
+            return json.dumps({
+                "error": f"Invalid target '{target}'. Use 'memory' or 'user'."
+            })
+        try:
+            from tools.memory_tool import get_memory_dir
+        except ImportError as e:
+            return json.dumps({"error": f"Memory unavailable: {e}"})
+
+        filename = "USER.md" if target == "user" else "MEMORY.md"
+        path = get_memory_dir() / filename
+        if not path.exists():
+            return json.dumps({
+                "target": target,
+                "path": str(path),
+                "exists": False,
+                "content": "",
+            }, indent=2)
+        try:
+            content = path.read_text(encoding="utf-8")
+        except OSError as e:
+            return json.dumps({"error": f"Failed to read {filename}: {e}"})
+        return json.dumps({
+            "target": target,
+            "path": str(path),
+            "exists": True,
+            "content": content,
+        }, indent=2)
+
+    # -- memory_note (WRITE — routes through the L1 memory write-gate) ------
+
+    @mcp.tool()
+    def memory_note(
+        content: str,
+        target: str = "memory",
+    ) -> str:
+        """Add an entry to the agent's persistent memory (WRITE — gated).
+
+        This is the only MC-as-MCP tool that mutates life-state. It routes
+        through the existing Hermes memory write-gate (the L1 trust hook):
+        when the gate is active (gateway/background contexts) the write is
+        STAGED for approval rather than applied immediately. Content is also
+        threat-scanned before it can enter the system prompt.
+
+        Args:
+            content: The memory entry text to add
+            target: "memory" (MEMORY.md) or "user" (USER.md). Default "memory".
+        """
+        if not content:
+            return json.dumps({"error": "content is required"})
+        if target not in {"memory", "user"}:
+            return json.dumps({
+                "error": f"Invalid target '{target}'. Use 'memory' or 'user'."
+            })
+        try:
+            from tools.memory_tool import MemoryStore, memory_tool
+        except ImportError as e:
+            return json.dumps({"error": f"Memory unavailable: {e}"})
+
+        try:
+            store = MemoryStore()
+            store.load_from_disk()
+            # memory_tool applies the write-gate and threat scan internally,
+            # then persists via the store.
+            return memory_tool(
+                action="add",
+                target=target,
+                content=content,
+                store=store,
+            )
+        except Exception as e:
+            return json.dumps({"error": f"Failed to write memory: {e}"})
 
     return mcp
 
