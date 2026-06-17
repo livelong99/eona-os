@@ -1,6 +1,6 @@
 """Brain — the L0 shared-memory contract (retrieve + append over the one vault).
 
-CONTRACT (Phase 0). Interface + stubs only. Worker W-C implements the body:
+CONTRACT (Phase 0). Interface + implementation by Worker W-C:
 fuse Qdrant similarity (``scripts/index-vault.py``) with the holographic
 ``FactRetriever`` (``engine/plugins/memory/holographic/retrieval.py``: FTS5 +
 Jaccard + HRR + temporal decay) AND a dated-note **time-walk** over the PARA
@@ -10,12 +10,60 @@ Consumers (do not change these signatures without coordinating): the Chronicle
 (L3), the Agent-Tools Platform one-brain wiring (§8.2), and the Evolution Engine
 (L5). All retrieved context is injected as USER messages by the caller, never
 into the system prompt (cache discipline, §5.4).
+
+Append-only write discipline
+----------------------------
+``append()`` never mutates an existing note.  Every write creates a new
+``YYYY-MM-DD-<id8>.md`` file in the namespace directory.  Callers that touch
+*learned* memory (ReasoningBank, Preference Spine) MUST pass ``TrustGate.gate``
+before calling ``append()`` — see ``engine/agent/trust_gate.py`` (W-D's domain).
+Brain itself does NOT call the gate; it is below L1 in the stack.
 """
 from __future__ import annotations
 
+import json
+import logging
+import os
+import uuid
 from dataclasses import dataclass, field
+from datetime import date, datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Vault + store paths
+# ---------------------------------------------------------------------------
+
+_DEFAULT_VAULT = Path(
+    os.environ.get(
+        "VAULT_DIR",
+        "/Users/perkypanda/Documents/Obsidian/Vault",
+    )
+)
+
+# SQLite brain store (holographic layer).  Override with BRAIN_DB env var.
+_DEFAULT_BRAIN_DB = Path(
+    os.environ.get("BRAIN_DB", str(Path.home() / ".agent-home" / "brain.db"))
+)
+
+# Qdrant vector index settings — same defaults as scripts/index-vault.py
+_QDRANT_URL = os.environ.get("QDRANT_URL", "http://127.0.0.1:6533").rstrip("/")
+_QDRANT_COLLECTION = "agent_home_vault"
+_GEMINI_EMBED_MODEL = os.environ.get("EMBED_MODEL", "gemini-embedding-001")
+_EMBED_DIM = 768
+
+# Namespace → vault-relative directory for append writes
+_NAMESPACE_DIRS: Dict[str, str] = {
+    "reasoningbank":   "20_Areas/agent-os/brain/reasoningbank",
+    "preference-spine": "20_Areas/agent-os/brain/preference-spine",
+}
+
+
+# ---------------------------------------------------------------------------
+# Public dataclasses (frozen — do not change signatures)
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
 class BrainFact:
@@ -38,8 +86,311 @@ class BrainResult:
     as_of: Optional[str] = None
 
 
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+
+def _merge_dedupe(facts: List[BrainFact], k: int) -> List[BrainFact]:
+    """Merge two similarity lanes, deduplicate by content, return top-k."""
+    seen: set[str] = set()
+    merged: List[BrainFact] = []
+    # Sort descending by score before dedup so higher-scored copy wins
+    for fact in sorted(facts, key=lambda f: f.score, reverse=True):
+        key = fact.content.strip()[:200]
+        if key in seen:
+            continue
+        seen.add(key)
+        merged.append(fact)
+        if len(merged) >= k:
+            break
+    return merged
+
+
+def _gemini_embed(text: str) -> Optional[List[float]]:
+    """Embed ``text`` via Gemini REST.  Returns None on any failure.
+
+    Mirrors the logic in ``scripts/index-vault.py`` so the query embedding
+    is consistent with the indexed embeddings.
+    """
+    import urllib.request
+    import urllib.error
+
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return None
+
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{_GEMINI_EMBED_MODEL}:embedContent?key={api_key}"
+    )
+    body = {
+        "model": f"models/{_GEMINI_EMBED_MODEL}",
+        "content": {"parts": [{"text": text[:8000]}]},
+        "outputDimensionality": _EMBED_DIM,
+    }
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(
+        url, data=data, headers={"content-type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode())["embedding"]["values"]
+    except Exception as exc:
+        logger.debug("Brain: Gemini embed failed (non-fatal): %s", exc)
+        return None
+
+
+def _qdrant_search(vector: List[float], k: int) -> List[Dict[str, Any]]:
+    """POST a similarity search to Qdrant.  Returns [] on any failure."""
+    import urllib.request
+    import urllib.error
+
+    url = f"{_QDRANT_URL}/collections/{_QDRANT_COLLECTION}/points/search"
+    body = {"vector": vector, "limit": k, "with_payload": True}
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(
+        url, data=data, headers={"content-type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read().decode())
+            return result.get("result", [])
+    except Exception as exc:
+        logger.debug("Brain: Qdrant search failed (non-fatal): %s", exc)
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Brain
+# ---------------------------------------------------------------------------
+
 class Brain:
     """The single L0 retrieve/append interface. One instance per process."""
+
+    def __init__(
+        self,
+        vault_dir: Optional[Path] = None,
+        brain_db: Optional[Path] = None,
+    ) -> None:
+        self._vault_dir: Path = vault_dir or _DEFAULT_VAULT
+        self._brain_db: Path = brain_db or _DEFAULT_BRAIN_DB
+        # Lazy-init holographic retriever — created on first use
+        self.__retriever = None
+
+    # ------------------------------------------------------------------
+    # Private helpers
+    # ------------------------------------------------------------------
+
+    def _retriever(self):
+        """Lazily construct the holographic FactRetriever."""
+        if self.__retriever is not None:
+            return self.__retriever
+
+        import importlib
+        import sys as _sys
+
+        # engine/ root (absolute) must be on sys.path so that
+        # "plugins.memory.holographic.*" resolves correctly.
+        _engine_root = str(Path(__file__).resolve().parent.parent)
+        _injected = _engine_root not in _sys.path
+        if _injected:
+            _sys.path.insert(0, _engine_root)
+
+        MemoryStore = None
+        FactRetriever = None
+        try:
+            _store = importlib.import_module("plugins.memory.holographic.store")
+            _retrieval = importlib.import_module("plugins.memory.holographic.retrieval")
+            MemoryStore = _store.MemoryStore
+            FactRetriever = _retrieval.FactRetriever
+        except ImportError as exc:
+            logger.debug(
+                "Brain: holographic module not importable (non-fatal): %s", exc
+            )
+
+        if MemoryStore is None or FactRetriever is None:
+            return None
+
+        try:
+            self._brain_db.parent.mkdir(parents=True, exist_ok=True)
+            store = MemoryStore(str(self._brain_db))
+            self.__retriever = FactRetriever(
+                store,
+                temporal_decay_half_life=30,  # 30-day half-life for recency bias
+            )
+        except Exception as exc:
+            logger.debug("Brain: FactRetriever init failed (non-fatal): %s", exc)
+            return None
+
+        return self.__retriever
+
+    def _similar_via_holographic(
+        self,
+        query: str,
+        *,
+        k: int,
+        min_trust: float,
+    ) -> List[BrainFact]:
+        """FTS5 + Jaccard + HRR similarity lane via FactRetriever."""
+        retriever = self._retriever()
+        if retriever is None:
+            return []
+
+        try:
+            raw = retriever.search(query, min_trust=min_trust, limit=k)
+        except Exception as exc:
+            logger.debug("Brain: holographic search failed (non-fatal): %s", exc)
+            raw = []
+
+        # Optional compositional recall for multi-word queries
+        if len(query.split()) >= 3:
+            try:
+                terms = query.split()[:3]
+                composed = retriever.reason(terms, limit=max(k // 2, 3))
+                # Merge without duplicating content already in raw
+                raw_contents = {f["content"] for f in raw}
+                raw += [f for f in composed if f["content"] not in raw_contents]
+            except Exception as exc:
+                logger.debug("Brain: holographic reason failed (non-fatal): %s", exc)
+
+        return [
+            BrainFact(
+                content=fact["content"],
+                score=float(fact.get("score", 0.0)),
+                provenance="vault",
+                source=fact.get("category"),
+                created_at=fact.get("created_at") or fact.get("updated_at"),
+                metadata={
+                    "tags": fact.get("tags", ""),
+                    "trust_score": fact.get("trust_score", 0.5),
+                    "retrieval_count": fact.get("retrieval_count", 0),
+                },
+            )
+            for fact in raw[:k]
+        ]
+
+    def _similar_via_qdrant(self, query: str, *, k: int) -> List[BrainFact]:
+        """Gemini embed → Qdrant vector similarity lane."""
+        vector = _gemini_embed(query)
+        if vector is None:
+            return []
+
+        hits = _qdrant_search(vector, k)
+        return [
+            BrainFact(
+                content=hit.get("payload", {}).get("preview", ""),
+                score=float(hit.get("score", 0.0)),
+                provenance="vault",
+                source=hit.get("payload", {}).get("path"),
+                metadata={"qdrant_id": hit.get("id")},
+            )
+            for hit in hits
+            if hit.get("payload", {}).get("preview")
+        ]
+
+    def _timewalk_to_facts(
+        self, query: str, *, as_of: Optional[str], k: int
+    ) -> List[BrainFact]:
+        """Walk dated PARA notes up to ``as_of`` and return as BrainFacts.
+
+        The time-walk answers "what happened, in order" rather than "what looks
+        like this?" — it is a chronological lane, not a similarity lane.
+        Query is unused for ordering (temporal order is the rank) but is kept
+        in the signature for future keyword pre-filtering.
+        """
+        try:
+            from engine.agent.brain_timewalk import walk_dated_notes
+        except ImportError:
+            try:
+                from brain_timewalk import walk_dated_notes  # type: ignore[no-redef]
+            except ImportError:
+                logger.debug("Brain: brain_timewalk not importable; temporal lane disabled")
+                return []
+
+        try:
+            entries = walk_dated_notes(
+                as_of=as_of,
+                vault_dir=self._vault_dir,
+                limit=k,
+            )
+        except Exception as exc:
+            logger.debug("Brain: time-walk failed (non-fatal): %s", exc)
+            return []
+
+        return [
+            BrainFact(
+                content=snippet or f"[note: {path_str}]",
+                score=1.0,  # temporal lane ranks by recency, not relevance score
+                provenance="vault",
+                source=path_str,
+                created_at=date_str,
+            )
+            for date_str, path_str, snippet in entries
+        ]
+
+    def _read_namespace(self, namespace: str, *, k: int) -> List[BrainFact]:
+        """Read the top-k most-recent records from a Brain namespace directory.
+
+        For cold-start (no embeddings yet), recency is the ranking signal:
+        the most recently written strategy / preference is most relevant.
+        """
+        ns_rel = _NAMESPACE_DIRS.get(namespace)
+        if ns_rel is None:
+            # Unknown namespace — try treating it as a vault-relative path
+            ns_rel = namespace
+
+        ns_dir = self._vault_dir / ns_rel
+        if not ns_dir.exists():
+            return []
+
+        try:
+            md_files = sorted(
+                ns_dir.glob("*.md"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,  # most recent first
+            )
+        except OSError as exc:
+            logger.debug("Brain: namespace read failed (non-fatal): %s", exc)
+            return []
+
+        facts: List[BrainFact] = []
+        for path in md_files[:k]:
+            try:
+                text = path.read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+
+            # Strip frontmatter from content
+            body = text
+            if text.startswith("---"):
+                end = text.find("\n---", 3)
+                if end != -1:
+                    body = text[end + 4:].lstrip()
+
+            # Extract created date from frontmatter for metadata
+            import re
+            fm_date_m = re.search(
+                r"^created:\s*['\"]?(\d{4}-\d{2}-\d{2})['\"]?",
+                text[:1000],
+                re.MULTILINE,
+            )
+            created_at = fm_date_m.group(1) if fm_date_m else None
+
+            facts.append(
+                BrainFact(
+                    content=body.strip(),
+                    score=1.0,
+                    provenance="derived",
+                    source=str(path.relative_to(self._vault_dir)),
+                    created_at=created_at,
+                )
+            )
+
+        return facts
+
+    # ------------------------------------------------------------------
+    # Public contract — do NOT change these signatures
+    # ------------------------------------------------------------------
 
     def retrieve(
         self,
@@ -52,11 +403,44 @@ class Brain:
     ) -> BrainResult:
         """Fused temporal + similarity + strategy + preference retrieval.
 
-        W-C: wrap ``FactRetriever.search`` (+ optional ``probe``/``reason``) for
-        ``similar``; walk dated PARA notes up to ``as_of`` for ``temporal``;
-        read ReasoningBank / Preference-Spine namespaces for the rest.
+        Four lanes run independently and degrade gracefully:
+
+        1. ``similar`` — holographic FTS5+Jaccard+HRR (FactRetriever.search +
+           optional FactRetriever.reason for multi-word queries) fused with
+           Qdrant vector similarity; deduped and ranked by score.
+        2. ``temporal`` — dated PARA note time-walk up to ``as_of``; answers
+           "what changed / what was decided, in order."
+        3. ``strategies`` — ReasoningBank namespace; distilled what-worked /
+           what-failed strategy memory, injected before each task.
+        4. ``preferences`` — Preference-Spine namespace; learned user taste from
+           kept-vs-rewrote edit signals.
+
+        All retrieved context MUST be injected as USER messages by the caller —
+        never into the system prompt (cache discipline §5.4).
         """
-        raise NotImplementedError("W-C: implement Brain.retrieve")
+        # Lane 1: similarity (holographic + Qdrant fused)
+        holographic_hits = self._similar_via_holographic(
+            query, k=k, min_trust=min_trust
+        )
+        qdrant_hits = self._similar_via_qdrant(query, k=k)
+        similar = _merge_dedupe(holographic_hits + qdrant_hits, k=k)
+
+        # Lane 2: temporal time-walk
+        temporal = self._timewalk_to_facts(query, as_of=as_of, k=k)
+
+        # Lane 3: strategy (ReasoningBank)
+        strategies = self._read_namespace("reasoningbank", k=k)
+
+        # Lane 4: preference (Preference-Spine)
+        preferences = self._read_namespace("preference-spine", k=k)
+
+        return BrainResult(
+            similar=similar,
+            temporal=temporal,
+            strategies=strategies,
+            preferences=preferences,
+            as_of=as_of,
+        )
 
     def append(
         self,
@@ -68,7 +452,65 @@ class Brain:
     ) -> str:
         """Append-only write to the vault brain; returns a record id.
 
-        W-C: append a dated record (never mutate in place); the caller routes
-        learned-memory writes through ``TrustGate.gate`` first (see trust_gate.py).
+        Writes a new ``YYYY-MM-DD-<id8>.md`` file inside the namespace
+        directory.  Never mutates an existing file.
+
+        Namespace routing
+        -----------------
+        - ``"reasoningbank"``    → ``20_Areas/agent-os/brain/reasoningbank/``
+        - ``"preference-spine"`` → ``20_Areas/agent-os/brain/preference-spine/``
+        - anything else          → treated as a vault-relative path
+
+        Callers that touch learned memory (ReasoningBank, Preference Spine)
+        MUST pass ``TrustGate.gate`` **before** calling this method.
+        Brain is L0 — it does not call the gate itself.
         """
-        raise NotImplementedError("W-C: implement Brain.append")
+        record_id = str(uuid.uuid4())
+        today = date.today().isoformat()
+
+        ns_rel = _NAMESPACE_DIRS.get(namespace, namespace)
+        ns_dir = self._vault_dir / ns_rel
+
+        try:
+            ns_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            raise RuntimeError(
+                f"Brain.append: cannot create namespace dir {ns_dir}: {exc}"
+            ) from exc
+
+        filename = f"{today}-{record_id[:8]}.md"
+        target = ns_dir / filename
+
+        # Build Obsidian-compatible frontmatter
+        meta_lines = ""
+        if metadata:
+            for k_m, v_m in metadata.items():
+                meta_lines += f"{k_m}: {v_m}\n"
+
+        note_text = (
+            f"---\n"
+            f"title: Brain record {record_id[:8]}\n"
+            f"created: {today}\n"
+            f"modified: {today}\n"
+            f"tags: [brain, {namespace.replace('/', '-')}]\n"
+            f"provenance: {provenance}\n"
+            f"record_id: {record_id}\n"
+            f"{meta_lines}"
+            f"---\n\n"
+            f"{content}\n"
+        )
+
+        try:
+            target.write_text(note_text, encoding="utf-8")
+        except OSError as exc:
+            raise RuntimeError(
+                f"Brain.append: write failed for {target}: {exc}"
+            ) from exc
+
+        logger.debug(
+            "Brain.append: wrote %s (namespace=%s, provenance=%s)",
+            target,
+            namespace,
+            provenance,
+        )
+        return record_id
