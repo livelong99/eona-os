@@ -1102,6 +1102,127 @@ class APIServerAdapter(BasePlatformAdapter):
             "pid": os.getpid(),
         })
 
+    async def _handle_voice_transcribe(self, request: "web.Request") -> "web.Response":
+        """POST /voice/transcribe — raw audio body -> {"text": ...}.
+
+        Speech-to-text for the dashboard mic (fallback when the browser's Web
+        Speech API is unavailable). Auth: Bearer API_SERVER_KEY. The audio
+        container is inferred from Content-Type (webm/ogg/wav/mp3/mp4/m4a);
+        MediaRecorder defaults to webm/opus. Runs the configured STT provider
+        (tools.transcription_tools.transcribe_audio) off the event loop.
+        """
+        auth = self._check_auth(request)
+        if auth is not None:
+            return auth
+
+        ctype = (request.headers.get("Content-Type", "") or "").lower()
+        ext = "webm"
+        for cand in ("webm", "ogg", "wav", "mp3", "mp4", "m4a", "aac", "flac"):
+            if cand in ctype:
+                ext = cand
+                break
+        raw = await request.read()
+        if not raw:
+            return web.json_response(
+                {"error": {"message": "empty audio body"}}, status=400
+            )
+
+        import tempfile
+        fd, path = tempfile.mkstemp(suffix="." + ext, prefix="voice-in-")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                f.write(raw)
+            from tools.transcription_tools import transcribe_audio
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, transcribe_audio, path)
+        except Exception as exc:  # noqa: BLE001 — surface as 500, never crash server
+            logger.warning("voice transcribe failed: %s", exc)
+            return web.json_response(
+                {"error": {"message": f"transcription error: {exc}"}}, status=500
+            )
+        finally:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+        if not isinstance(result, dict) or not result.get("success"):
+            msg = (result or {}).get("error") if isinstance(result, dict) else None
+            return web.json_response(
+                {"error": {"message": msg or "transcription failed"}}, status=500
+            )
+        return web.json_response({"text": result.get("transcript", "")})
+
+    async def _handle_voice_speak(self, request: "web.Request") -> "web.Response":
+        """POST /voice/speak {"text": ...} -> audio/mpeg bytes.
+
+        Text-to-speech for spoken replies on the dashboard. Auth: Bearer
+        API_SERVER_KEY. Uses the configured tts.provider (piper by default,
+        local/offline) via tools.tts_tool.text_to_speech_tool, run off the
+        event loop. Returns the synthesized audio so the browser can play it.
+        """
+        auth = self._check_auth(request)
+        if auth is not None:
+            return auth
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response(
+                {"error": {"message": "invalid JSON body"}}, status=400
+            )
+        text = (body.get("text") or "").strip() if isinstance(body, dict) else ""
+        if not text:
+            return web.json_response(
+                {"error": {"message": "missing 'text'"}}, status=400
+            )
+
+        import tempfile
+        fd, out_path = tempfile.mkstemp(suffix=".mp3", prefix="voice-out-")
+        os.close(fd)
+        produced_path = out_path
+        try:
+            from tools.tts_tool import text_to_speech_tool
+            loop = asyncio.get_event_loop()
+            raw_result = await loop.run_in_executor(
+                None, text_to_speech_tool, text, out_path
+            )
+            # text_to_speech_tool returns a JSON string; recover the real path
+            # (it may emit .ogg/.wav depending on provider).
+            try:
+                parsed = json.loads(raw_result) if isinstance(raw_result, str) else None
+            except (ValueError, TypeError):
+                parsed = None
+            if isinstance(parsed, dict):
+                if parsed.get("success") is False:
+                    return web.json_response(
+                        {"error": {"message": parsed.get("error") or "tts failed"}},
+                        status=500,
+                    )
+                produced_path = parsed.get("file_path") or out_path
+
+            if not os.path.exists(produced_path):
+                return web.json_response(
+                    {"error": {"message": "tts produced no audio (check tts.provider)"}},
+                    status=500,
+                )
+            audio = await loop.run_in_executor(
+                None, lambda p=produced_path: Path(p).read_bytes()
+            )
+            ctype = "audio/ogg" if produced_path.endswith(".ogg") else "audio/mpeg"
+            return web.Response(body=audio, content_type=ctype)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("voice speak failed: %s", exc)
+            return web.json_response(
+                {"error": {"message": f"tts error: {exc}"}}, status=500
+            )
+        finally:
+            for p in {out_path, produced_path}:
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
+
     async def _handle_models(self, request: "web.Request") -> "web.Response":
         """GET /v1/models — return hermes-agent as an available model."""
         auth_err = self._check_auth(request)
@@ -4202,6 +4323,19 @@ class APIServerAdapter(BasePlatformAdapter):
             self._app.router.add_get("/v1/runs/{run_id}/events", self._handle_run_events)
             self._app.router.add_post("/v1/runs/{run_id}/approval", self._handle_run_approval)
             self._app.router.add_post("/v1/runs/{run_id}/stop", self._handle_stop_run)
+            # Voice surface for the dashboard mic (STT in / TTS out). Bearer-auth
+            # like the rest of the API; see _handle_voice_transcribe/_speak.
+            self._app.router.add_post("/voice/transcribe", self._handle_voice_transcribe)
+            self._app.router.add_post("/voice/speak", self._handle_voice_speak)
+            # Dashboard data API (/v1/tasks, /v1/memory, /v1/events). Handlers live
+            # in api_dashboard.py so worker W-B never edits this route block. The
+            # registration is pre-wired in Phase 0; the handlers are stubs (501)
+            # until W-B implements them.
+            try:
+                from gateway.platforms.api_dashboard import register_dashboard_routes
+                register_dashboard_routes(self._app, self)
+            except Exception as _dash_exc:  # never let the dashboard routes break startup
+                logger.warning("dashboard data routes not registered: %s", _dash_exc)
             # Store the adapter after native routes are registered. Local Hermes-Relay
             # bootstrap shims use this key as a feature-detection hook; registering
             # native routes first lets those shims no-op instead of shadowing the

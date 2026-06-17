@@ -247,3 +247,76 @@ docker-compose.yml  hermes + searxng + crawl4ai + qdrant + dashboard (all 127.0.
   as a dated vault note; manual paste into Google Flow produces usable media.
 - **Security:** `doctor` reports no plaintext secrets, all services on 127.0.0.1, vault access scoped, no paid
   API beyond Gemini in use.
+
+## 10. Full feature enablement (Claude-only fork)
+
+This section records the always-on capabilities turned on beyond the v1 base. The governing
+constraint is the **always-on brain**: every turn delegates to the `claude` CLI, so 24/7 cron,
+gateways, and voice require the host machine + Docker stack + Claude bridge to stay up and consume
+the Claude subscription continuously.
+
+### 10.1 Always-on substrate
+- All compose services use `restart: unless-stopped`; the `hermes` service runs the full gateway
+  loop (`gateway run`) which ticks cron every 60s **and** polls enabled platforms.
+- The Claude bridge is a supervised launchd agent, not a manual terminal:
+  `scripts/install-bridge-service.sh` installs `com.agenthome.claude-bridge` (KeepAlive + RunAtLoad).
+  Enable Docker Desktop "start on login" to complete the always-on chain.
+
+### 10.2 Autonomous skill creation (Curator)
+- `curator:` block in `hermes/config.yaml` (`enabled: true`, `interval_hours: 24`). The gateway idle
+  loop runs `maybe_run_curator()`; the review fork inherits the main model (→ `claude_code`).
+- Claude turns can author skills directly: `skill_manage` is exposed via the `hermes-tools` MCP
+  server (`engine/agent/transports/hermes_tools_mcp_server.py`). Curator only touches
+  `created_by: agent` skills and never deletes (archive only).
+
+### 10.3 24/7 background execution + tiered autonomy
+- Seed jobs with `scripts/seed-cron.sh` (idempotent by name). Jobs carry an `autonomy` tier:
+  - `content`/`full` → `bypassPermissions` (read/research/content; runs fully unattended).
+  - `guarded`/unset (DEFAULT) → `acceptEdits` + Tirith; Bash/shell/git stay gated and scanned.
+- The seam lives in `engine/cron/scheduler.py` (`_resolve_cron_permission_mode`): only full-autonomy
+  jobs override `CLAUDE_RUNTIME_PERMISSION_MODE`, and those are routed to the serialized pool so the
+  process-global env can't race (same guarantee as workdir jobs). `autonomy` is plumbed through
+  `cron.jobs.create_job`.
+
+### 10.4 Cross-platform gateways (Telegram + Discord + WhatsApp)
+- Platform blocks live under top-level `platforms:` in `hermes/config.yaml`, shipped `enabled: false`.
+  **Two-step to turn one on:** add its token(s) to `~/.hermes/.env`, flip `enabled: true`, then
+  `docker compose restart hermes`. Tokens use `${ENV}` interpolation, sourced via the compose
+  `env_file`.
+- **Required env keys** (add to `~/.hermes/.env`):
+  - Telegram: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_HOME_CHANNEL`
+  - Discord: `DISCORD_BOT_TOKEN`, `DISCORD_HOME_CHANNEL`
+  - WhatsApp Cloud: `WHATSAPP_API_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_HOME_CHANNEL`
+  - Optional per-platform allowlist: `TELEGRAM_ALLOWED_USERS` / `DISCORD_ALLOWED_USERS` / etc.
+- **Security:** enabling a platform makes the agent reachable from outside 127.0.0.1.
+  `unauthorized_dm_behavior: pair` requires unknown senders to pair first; restrict further with
+  `*_ALLOWED_USERS`. **Never** set `GATEWAY_ALLOW_ALL_USERS=true` on an internet-reachable bot
+  (`doctor.sh` fails if it sees this). Inbound voice memos are auto-transcribed (`stt_enabled: true`).
+
+### 10.5 Voice
+- **Dashboard mic (built):** push-to-talk + spoken replies in `ChatView`. STT/TTS go through the
+  engine endpoints `POST /voice/transcribe` and `POST /voice/speak`
+  (`gateway/platforms/api_server.py`), proxied via `dashboard/.../api/hermes/[...path]` so the API key
+  stays server-side (the proxy forwards raw bytes for binary audio). TTS uses local **piper**
+  (`tts.provider: piper`) — no paid provider, no key.
+- **Messaging voice:** voice memos on Telegram/Discord are transcribed inbound; replies use the same
+  piper TTS.
+- **OMI wearable:** documented, not built — post-v1 (Layer 0 capture).
+
+### 10.6 Multi-agent orchestration
+- Local-first and already wired: `delegation` (`max_concurrent_children: 8`), the Kanban dispatcher,
+  `delegate_task`, and Goal Mode are available through the running gateway — no extra config.
+
+### 10.7 Serverless execution (documented, deferred)
+- Heavy/parallel jobs can burst to serverless by changing `terminal.backend` in `hermes/config.yaml`:
+  - `local` (current) → in-container execution.
+  - `modal` → Modal serverless (hibernates when idle). Needs a Modal account + `MODAL_TOKEN_ID` /
+    `MODAL_TOKEN_SECRET`.
+  - `daytona` → Daytona cloud workspaces. Needs a Daytona account + API token.
+- This is a config flip, not code. Keep it deferred until a workload actually needs cloud burst;
+  local Docker covers the current multi-agent use.
+
+### 10.8 New operational scripts
+- `scripts/install-bridge-service.sh` (+ `run-bridge.sh`, `com.agenthome.claude-bridge.plist`) — bridge as launchd service.
+- `scripts/seed-cron.sh` — seed the canonical 24/7 cron jobs with autonomy tiers.
+- `scripts/doctor.sh` — extended with bridge-service, voice-endpoint-auth, and gateway-exposure checks.

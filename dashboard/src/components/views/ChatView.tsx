@@ -1,10 +1,12 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { SendHorizontal } from "lucide-react";
+import { SendHorizontal, Volume2, VolumeX } from "lucide-react";
 import type { Agent, Message } from "@/lib/types";
 import { sendMessageStream } from "@/lib/hermes";
+import { speak } from "@/lib/voice";
 import { AgentIcon } from "@/components/ui/AgentIcon";
+import { MicButton } from "@/components/ui/MicButton";
 import { TierBadge } from "@/components/ui/TierBadge";
 
 interface ChatViewProps {
@@ -15,6 +17,7 @@ export function ChatView({ agent }: ChatViewProps) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
+  const [speakReplies, setSpeakReplies] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   async function submit() {
@@ -38,13 +41,18 @@ export function ChatView({ agent }: ChatViewProps) {
       requestAnimationFrame(() =>
         scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight }),
       );
+    let acc = "";
     try {
       const { live } = await sendMessageStream(agent.model, text, (chunk) => {
+        acc += chunk;
         setMessages((prev) =>
           prev.map((m) => (m.id === replyId ? { ...m, text: m.text + chunk } : m)),
         );
         bump();
       });
+      if (live && speakReplies && acc.trim()) {
+        void speak(acc);
+      }
       if (!live) {
         setMessages((prev) =>
           prev.map((m) =>
@@ -75,7 +83,27 @@ export function ChatView({ agent }: ChatViewProps) {
             <p className="text-xs text-muted">{agent.blurb}</p>
           </div>
         </div>
-        <TierBadge tier={agent.tier} />
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setSpeakReplies((v) => !v)}
+            className={`flex h-9 w-9 items-center justify-center rounded-lg border transition-colors ${
+              speakReplies
+                ? "border-accent/60 bg-accent/10 text-accent"
+                : "border-border bg-surface text-muted hover:text-foreground/80"
+            }`}
+            aria-label={speakReplies ? "Mute spoken replies" : "Speak replies aloud"}
+            aria-pressed={speakReplies}
+            title={speakReplies ? "Spoken replies on" : "Spoken replies off"}
+          >
+            {speakReplies ? (
+              <Volume2 className="h-4 w-4" />
+            ) : (
+              <VolumeX className="h-4 w-4" />
+            )}
+          </button>
+          <TierBadge tier={agent.tier} />
+        </div>
       </header>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-5">
@@ -115,6 +143,12 @@ export function ChatView({ agent }: ChatViewProps) {
 
       <div className="border-t border-border px-6 py-4">
         <div className="mx-auto flex max-w-2xl items-end gap-2">
+          <MicButton
+            onTranscript={(t) =>
+              setDraft((d) => (d.trim() ? `${d} ${t}` : t))
+            }
+            disabled={busy}
+          />
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}

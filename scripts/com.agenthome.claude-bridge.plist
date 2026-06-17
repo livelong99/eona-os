@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- launchd template for the Claude Code delegation bridge (24/7 substrate).
+     __REPO_ROOT__ is substituted with the absolute repo path by
+     scripts/install-bridge-service.sh before loading into ~/Library/LaunchAgents/.
+     Do not load this file in place; run the installer. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.agenthome.claude-bridge</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__REPO_ROOT__/scripts/run-bridge.sh</string>
+    </array>
+
+    <!-- Restart on crash and start at login: the bridge must always be up. -->
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Throttle restart attempts so a misconfig doesn't hot-loop. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/claude-bridge.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/claude-bridge.err.log</string>
+</dict>
+</plist>

@@ -235,6 +235,13 @@ RUN chmod -R a+rX /opt/hermes && \
 # this a fast (~1s) egg-link creation with no resolution or downloads.
 RUN uv pip install --no-cache-dir --no-deps -e "."
 
+# ---------- Local voice deps: Piper TTS + faster-whisper STT ----------
+# Neither is in pyproject extras; Hermes normally installs them at `hermes setup`
+# time, so a fresh image can't do local TTS (piper provider) or local STT
+# (faster-whisper). Bake both in so voice works out of the box. Voice .onnx
+# models are mounted via ~/.hermes/voices; whisper models download on first use.
+RUN uv pip install --no-cache-dir piper-tts faster-whisper
+
 # ---------- Bake build-time git revision ----------
 # .dockerignore excludes .git, so `git rev-parse HEAD` from inside the
 # container always returns nothing — meaning `hermes dump` reports

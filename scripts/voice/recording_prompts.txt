@@ -1,0 +1,116 @@
+# Recording prompts for a custom Piper voice (TextyMcSpeechy dataset).
+#
+# Format per line:  <id>|<text to read aloud>
+#   - id becomes the wav filename (no extension), exactly as required by
+#     TextyMcSpeechy's metadata.csv ("Each line begins with the name of an
+#     audio file. Do not include the file extension").
+#   - Lines starting with '#' and blank lines are ignored by record_dataset.py.
+#
+# The first real entry MUST be the roomtone clip (record ~20s of silence) so the
+# trainer can profile and remove background noise.
+#
+# This corpus is ~100 phonetically diverse, assistant-flavored prompts (numbers,
+# times, dates, acronyms, questions) — well inside TextyMcSpeechy's 50–200 sweet
+# spot. Read each one naturally, in a consistent tone/distance from the mic.
+
+roomtone|Please record about twenty seconds of silence to capture the room tone.
+file0001|The quick brown fox jumps over the lazy dog.
+file0002|She sells sea shells by the shore on a bright summer morning.
+file0003|A journey of a thousand miles begins with a single step.
+file0004|Bright stars glittered above the quiet, sleeping village.
+file0005|He carefully placed the heavy box on the wooden shelf.
+file0006|The children laughed and played in the warm afternoon sun.
+file0007|Could you please repeat that a little more slowly?
+file0008|I think we should leave before the weather gets worse.
+file0009|The committee voted to approve the new budget on Thursday.
+file0010|Fresh bread and strong coffee filled the little kitchen.
+file0011|Why did the engine stall halfway up the steep hill?
+file0012|My favorite season is autumn, when the leaves turn gold and red.
+file0013|The orchestra tuned their instruments before the concert began.
+file0014|Three plus four equals seven, and seven times eight is fifty-six.
+file0015|The meeting is scheduled for nine fifteen on Monday morning.
+file0016|Your package will arrive between three and five o'clock tomorrow.
+file0017|It costs forty-two dollars and ninety-nine cents, including tax.
+file0018|The marathon route covers twenty-six point two miles.
+file0019|Please set a timer for twenty-five minutes and let me know.
+file0020|The temperature dropped to minus ten degrees overnight.
+file0021|We reached the summit at precisely six forty in the evening.
+file0022|About ninety percent of the survey responses were positive.
+file0023|The flight departs at eleven fifty and lands just after two.
+file0024|On July fourth, the whole town gathered for the fireworks.
+file0025|Room two oh seven is at the end of the long hallway.
+file0026|The recipe calls for two cups of flour and a pinch of salt.
+file0027|Version three point eight was released earlier this week.
+file0028|Call me back at five five five, one two three four.
+file0029|The library closes at eight, so we have just enough time.
+file0030|Nineteen students passed the exam on their first attempt.
+file0031|Open the latest pull request and review the changes carefully.
+file0032|The A P I returned an error, so I retried the request twice.
+file0033|Please push your commits to the main branch before noon.
+file0034|I cloned the repository and ran the tests without any failures.
+file0035|The U R L points to a page that no longer exists.
+file0036|GitHub flagged the build as passing after the last fix.
+file0037|Could you check the logs and tell me what caused the crash?
+file0038|The database migration completed in under thirty seconds.
+file0039|We deployed the update to production at midnight on Friday.
+file0040|The dashboard shows live status for every running agent.
+file0041|A gentle rain tapped softly against the windowpane.
+file0042|Thunder rumbled far away as the storm rolled across the bay.
+file0043|The old clock in the hall chimed twelve times at midnight.
+file0044|Crisp mountain air filled their lungs as they climbed higher.
+file0045|The museum exhibit featured rare paintings from the sixteenth century.
+file0046|Wild geese flew south in a long, wavering line.
+file0047|The chef garnished the plate with a sprig of fresh basil.
+file0048|A curious cat watched the birds from the kitchen window.
+file0049|The lighthouse beam swept slowly across the dark water.
+file0050|They pitched their tent beside a clear, rushing stream.
+file0051|The professor explained the theory with surprising clarity.
+file0052|Honestly, I am not sure that plan will work as expected.
+file0053|Let's grab lunch after the standup and talk it through.
+file0054|That is a fantastic idea, and I think the team will love it.
+file0055|Wait, did you remember to lock the back door this time?
+file0056|Of course, I would be happy to help you with that.
+file0057|To be honest, the results exceeded all of our expectations.
+file0058|Remember to breathe, relax your shoulders, and speak slowly.
+file0059|The voice assistant understood the command on the first try.
+file0060|Good morning! Here is a quick summary of your day ahead.
+file0061|Zebras, jaguars, and foxes roamed the wide, dusty plains.
+file0062|The juggler tossed six flaming torches without a single slip.
+file0063|Vivid purple flowers bloomed along the winding garden path.
+file0064|The blacksmith hammered the glowing iron into a curved blade.
+file0065|Whispering pines lined the trail down to the rocky cove.
+file0066|An eagle circled high above the jagged canyon walls.
+file0067|The toddler stacked the colorful blocks into a wobbly tower.
+file0068|Smooth jazz drifted out from the corner of the dim café.
+file0069|The astronaut described the view of Earth from orbit.
+file0070|Sparks flew as the train screeched to a sudden halt.
+file0071|The treaty was signed by both nations in early spring.
+file0072|A thick fog settled over the harbor just before dawn.
+file0073|The detective examined every clue with painstaking patience.
+file0074|Glittering snow blanketed the rooftops of the sleepy town.
+file0075|The surgeon worked steadily through the long, tense night.
+file0076|Brilliant fireworks burst above the cheering crowd.
+file0077|The river carved a deep gorge through the ancient stone.
+file0078|Her speech moved the entire audience to a standing ovation.
+file0079|The puppy chased its tail in dizzy, happy circles.
+file0080|A single candle flickered in the drafty stone chamber.
+file0081|The scientists measured the reaction at several temperatures.
+file0082|Could you summarize the report in two or three sentences?
+file0083|The plane banked gently and turned toward the setting sun.
+file0084|Quietly, she closed the book and reached for another.
+file0085|The vendor sold roasted chestnuts on the freezing corner.
+file0086|Our team shipped the feature ahead of the deadline.
+file0087|The waterfall thundered into the pool a hundred feet below.
+file0088|He whistled a cheerful tune as he walked to work.
+file0089|The garden buzzed with bees on the warm spring afternoon.
+file0090|Please confirm whether you want me to proceed or wait.
+file0091|The ferry crossed the strait under a pale crescent moon.
+file0092|A loud knock at the door startled everyone in the room.
+file0093|The hikers followed the map to a hidden alpine lake.
+file0094|Sixteen candles flickered on the enormous birthday cake.
+file0095|The engineer traced the fault to a single loose wire.
+file0096|Golden sunlight spilled across the wide kitchen floor.
+file0097|They danced until the band played its very last song.
+file0098|The owl hooted twice and vanished into the dark woods.
+file0099|I have finished the task, and everything checks out cleanly.
+file0100|Thank you for listening; that concludes today's briefing.

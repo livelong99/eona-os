@@ -23,7 +23,9 @@ async function proxy(req: NextRequest, path: string[]): Promise<Response> {
 
   const init: RequestInit = { method: req.method, headers };
   if (req.method !== "GET" && req.method !== "HEAD") {
-    init.body = await req.text();
+    // Forward the raw bytes so binary uploads (e.g. /voice/transcribe audio)
+    // pass through intact — req.text() would corrupt non-UTF-8 bodies.
+    init.body = Buffer.from(await req.arrayBuffer());
   }
 
   try {

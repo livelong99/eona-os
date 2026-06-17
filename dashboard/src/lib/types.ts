@@ -85,3 +85,56 @@ export interface TaskEvent {
   message: string;
   ts: number;
 }
+
+// --- RunEvent (CONTRACT, Phase 0) -------------------------------------------
+// The canonical run-stream event the Glass Cockpit, the tools Workbench, and the
+// Trust Rail consume. MUST stay in lockstep with engine/agent/run_events.py.
+// Worker W-A produces these (extending streamRunEvents parsing); consumers must
+// tolerate unknown kinds/fields (render generically, never crash).
+export type RunEventKind =
+  | "run.header"
+  | "message.delta"
+  | "reasoning.available"
+  | "tool.started"
+  | "tool.completed"
+  | "diff"
+  | "terminal"
+  | "subagent.started"
+  | "subagent.completed"
+  | "approval.request"
+  | "approval.responded"
+  | "run.completed"
+  | "run.failed"
+  | "run.cancelled";
+
+export const RUN_EVENT_KINDS: readonly RunEventKind[] = [
+  "run.header", "message.delta", "reasoning.available",
+  "tool.started", "tool.completed", "diff", "terminal",
+  "subagent.started", "subagent.completed",
+  "approval.request", "approval.responded",
+  "run.completed", "run.failed", "run.cancelled",
+] as const;
+
+export interface RunEvent {
+  event: RunEventKind;
+  runId: string;
+  timestamp: number;
+  // kind-specific (all optional; mirror run_events.py)
+  text?: string;
+  tool?: string;
+  preview?: string;
+  duration?: number;
+  error?: boolean | string;
+  path?: string;
+  patch?: string;
+  spanId?: string;
+  parentToolUseId?: string | null;
+  subagentType?: string;
+  model?: string;
+  tools?: string[];
+  mcpServers?: string[];
+  choices?: string[];
+  choice?: string;
+  output?: string;
+  usage?: Record<string, unknown>;
+}

@@ -90,6 +90,11 @@ EXPOSED_TOOLS: tuple[str, ...] = (
     "image_generate",
     "skill_view",
     "skills_list",
+    # skill_manage (action=create/edit/patch/delete/write_file/remove_file) is
+    # what lets a Claude turn AUTHOR its own skills — the basis of autonomous
+    # skill creation. It only writes under ~/.hermes/skills/, so it's a scoped,
+    # higher-level alternative to raw write_file/patch (which we still withhold).
+    "skill_manage",
     "text_to_speech",
     # Kanban worker handoff tools — gated on HERMES_KANBAN_TASK env var
     # (set by the kanban dispatcher when spawning a worker). Without these

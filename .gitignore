@@ -30,3 +30,8 @@ venv/
 .DS_Store
 *.log
 Thumbs.db
+
+# Custom-voice recordings (personal audio + trained models — keep out of git)
+voice-dataset/
+*.onnx
+*.onnx.json

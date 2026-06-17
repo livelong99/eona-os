@@ -111,6 +111,48 @@ def _resolve_cron_enabled_toolsets(job: dict, cfg: dict) -> list[str] | None:
         )
         return None
 
+
+# Tiered autonomy for unattended cron turns. The in-container claude_code runtime
+# reads CLAUDE_RUNTIME_PERMISSION_MODE (default "acceptEdits") when it builds a
+# ClaudeCodeSession. A cron job's ``autonomy`` field selects the permission mode:
+#   - "content"/"full" → "bypassPermissions": no approval gate, for
+#     read/research/content jobs that don't touch shell/git/fs. Max unattended
+#     throughput.
+#   - "guarded"/unset (DEFAULT) → None (no override): the runtime keeps its
+#     default "acceptEdits" — file edits auto-apply but Bash and other sensitive
+#     tools still route through approval, and Tirith pre-exec scanning
+#     (security.tirith_enabled) stays in force.
+# The cron prompt-injection scan (_scan_assembled_cron_prompt) runs for BOTH
+# tiers. Unknown/empty values fail safe to guarded (None). Returning None for the
+# default means ordinary jobs do NOT mutate the process-global env and stay
+# parallel-safe; only full-autonomy jobs mutate env and are therefore serialized
+# by tick() (see _cron_job_needs_serialization).
+_FULL_AUTONOMY_TIERS = frozenset({"content", "full"})
+
+
+def _resolve_cron_permission_mode(job: dict) -> Optional[str]:
+    """Permission-mode override for a cron job's claude_code turn.
+
+    Returns "bypassPermissions" for full-autonomy jobs, or None to leave the
+    runtime default (guarded/acceptEdits) in place. See _FULL_AUTONOMY_TIERS.
+    """
+    tier = str(job.get("autonomy") or "").strip().lower()
+    return "bypassPermissions" if tier in _FULL_AUTONOMY_TIERS else None
+
+
+def _cron_job_needs_serialization(job: dict) -> bool:
+    """True if a job mutates process-global state and must run serialized.
+
+    Two sources of process-global mutation in run_job: a per-job ``workdir``
+    (sets TERMINAL_CWD) and a full-autonomy ``autonomy`` tier (sets
+    CLAUDE_RUNTIME_PERMISSION_MODE). Either forces the serialized pool so
+    concurrent jobs can't corrupt each other's os.environ.
+    """
+    if (job.get("workdir") or "").strip():
+        return True
+    return _resolve_cron_permission_mode(job) is not None
+
+
 # Valid delivery platforms — used to validate user-supplied platform names
 # in cron delivery targets, preventing env var enumeration via crafted names.
 _KNOWN_DELIVERY_PLATFORMS = frozenset({
@@ -1558,6 +1600,19 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
         os.environ["TERMINAL_CWD"] = _job_workdir
         logger.info("Job '%s': using workdir %s", job_id, _job_workdir)
 
+    # Tiered autonomy (claude_code runtime). Only full-autonomy jobs override the
+    # permission mode; guarded/default jobs leave the env untouched so they stay
+    # parallel-safe. tick() routes any job needing an override into the serialized
+    # pool (_cron_job_needs_serialization), so this os.environ mutation can't race.
+    _job_perm_mode = _resolve_cron_permission_mode(job)
+    _prior_perm_mode = os.environ.get("CLAUDE_RUNTIME_PERMISSION_MODE", "_UNSET_")
+    if _job_perm_mode:
+        os.environ["CLAUDE_RUNTIME_PERMISSION_MODE"] = _job_perm_mode
+        logger.info(
+            "Job '%s': autonomy=%s -> permission_mode=%s",
+            job_id, job.get("autonomy"), _job_perm_mode,
+        )
+
     try:
         # Re-read .env and config.yaml fresh every run so provider/key
         # changes take effect without a gateway restart.
@@ -1922,6 +1977,12 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
                 os.environ.pop("TERMINAL_CWD", None)
             else:
                 os.environ["TERMINAL_CWD"] = _prior_terminal_cwd
+        # Restore the autonomy permission-mode override (full-autonomy jobs only).
+        if _job_perm_mode:
+            if _prior_perm_mode == "_UNSET_":
+                os.environ.pop("CLAUDE_RUNTIME_PERMISSION_MODE", None)
+            else:
+                os.environ["CLAUDE_RUNTIME_PERMISSION_MODE"] = _prior_perm_mode
         # Clean up ContextVar session/delivery state for this job.
         clear_session_vars(_ctx_tokens)
         for _var_name in _cron_delivery_vars:
@@ -2088,12 +2149,13 @@ def tick(verbose: bool = True, adapters=None, loop=None, sync: bool = True) -> i
                 mark_job_run(job["id"], False, str(e))
                 return False
 
-        # Partition due jobs: those with a per-job workdir mutate
-        # os.environ["TERMINAL_CWD"] inside run_job, which is process-global —
-        # so they MUST run sequentially to avoid corrupting each other.  Jobs
-        # without a workdir leave env untouched and stay parallel-safe.
-        sequential_jobs = [j for j in due_jobs if (j.get("workdir") or "").strip()]
-        parallel_jobs = [j for j in due_jobs if not (j.get("workdir") or "").strip()]
+        # Partition due jobs: those that mutate process-global env inside run_job
+        # — a per-job workdir (TERMINAL_CWD) or a full-autonomy permission-mode
+        # override (CLAUDE_RUNTIME_PERMISSION_MODE) — MUST run sequentially to
+        # avoid corrupting each other. Plain guarded/workdir-less jobs leave env
+        # untouched and stay parallel-safe.
+        sequential_jobs = [j for j in due_jobs if _cron_job_needs_serialization(j)]
+        parallel_jobs = [j for j in due_jobs if not _cron_job_needs_serialization(j)]
 
         _results: list = []
         _all_futures: list = []

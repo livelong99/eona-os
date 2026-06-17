@@ -34,6 +34,22 @@ memory:
   user_profile_enabled: true
   memory_char_limit: 1300
 
+# --- Curator (autonomous skill lifecycle) -------------------------------------
+# Periodically reviews agent-created skills: consolidates overlaps, builds
+# umbrella skills, and archives stale ones. The gateway daemon calls
+# maybe_run_curator() on idle (gateway/run.py); it self-gates on interval_hours
+# + min_idle_hours. The review fork runs on the MAIN model (provider: auto ->
+# claude_code), so no separate aux provider is needed in this Claude-only fork.
+# Safe by design: only touches skills with created_by: "agent"; never deletes —
+# the most destructive action is archive to ~/.hermes/skills/.archive/.
+curator:
+  enabled: true
+  interval_hours: 24 # run at most once/day (default is 168 = 7d)
+  min_idle_hours: 2 # only when the agent has been idle this long
+  stale_after_days: 30 # mark unused skills stale
+  archive_after_days: 90 # archive (never delete) after this much non-use
+  prune_builtins: false # never touch bundled built-in skills
+
 # --- Execution environment ----------------------------------------------------
 terminal:
   backend: local # inside the Hermes container
@@ -42,13 +58,64 @@ terminal:
 security:
   tirith_enabled: true # pre-exec command scanning
 
-# --- API server (OpenAI-compatible; the dashboard talks to this) --------------
+# --- Gateway: API server + messaging platforms --------------------------------
 # Host is set via API_SERVER_HOST env (0.0.0.0 in-container; host exposure is the
 # compose 127.0.0.1 publish). Port 8642.
+#
+# Messaging platforms (Telegram/Discord/WhatsApp) are wired but ship DISABLED so
+# the gateway stays healthy before tokens exist. To turn one on:
+#   1. add its token(s) to ~/.hermes/.env  (see hermes/.env.example)
+#   2. flip `enabled: false` -> `true` here
+#   3. restart:  docker compose restart hermes
+# Tokens use ${ENV} interpolation (resolved from ~/.hermes/.env at load).
+#
+# SECURITY: enabling a platform makes the agent reachable from outside 127.0.0.1.
+# unauthorized_dm_behavior: pair => unknown senders must pair before they're
+# served (they can't drive the agent un-paired). Restrict further per platform
+# with *_ALLOWED_USERS env (e.g. TELEGRAM_ALLOWED_USERS=123,456). Never set
+# GATEWAY_ALLOW_ALL_USERS=true on an internet-reachable bot.
+unauthorized_dm_behavior: pair
+stt_enabled: true # auto-transcribe inbound voice memos (voice assistant via chat)
 platforms:
   api_server:
     enabled: true
     port: 8642
+  telegram:
+    enabled: false # set true after TELEGRAM_BOT_TOKEN is in ~/.hermes/.env
+    token: "${TELEGRAM_BOT_TOKEN}"
+    home_channel:
+      platform: telegram
+      chat_id: "${TELEGRAM_HOME_CHANNEL}" # numeric chat id for cron delivery
+      name: Home
+  discord:
+    enabled: false # set true after DISCORD_BOT_TOKEN is in ~/.hermes/.env
+    token: "${DISCORD_BOT_TOKEN}"
+    home_channel:
+      platform: discord
+      chat_id: "${DISCORD_HOME_CHANNEL}"
+      name: Home
+  whatsapp_cloud: # Meta WhatsApp Cloud API
+    enabled: false # set true after WHATSAPP_* are in ~/.hermes/.env
+    extra:
+      phone_number_id: "${WHATSAPP_PHONE_ID}"
+      access_token: "${WHATSAPP_API_TOKEN}"
+    home_channel:
+      platform: whatsapp_cloud
+      chat_id: "${WHATSAPP_HOME_CHANNEL}"
+      name: Home
+
+# --- Voice: text-to-speech (spoken replies on chat + voice-capable platforms) -
+# Inbound STT is handled by stt_enabled above. piper is a local/offline TTS
+# backend (no paid provider, no API key) — good default for the container.
+tts:
+  enabled: true
+  provider: piper
+  piper:
+    # Stock en_US-lessac-high (clean, reliable) — good for validating the TTS
+    # path. Swap to /opt/data/voices/en_US-miles-medium.onnx for the custom Miles
+    # voice. Voices live in ~/.hermes/voices/ → /opt/data in-container; the
+    # .onnx.json must sit beside the .onnx (same basename).
+    voice: /opt/data/voices/en_US-lessac-high.onnx
 
 # --- MCP servers: shared memory + tools (verify shape vs `hermes` MCP docs) ----
 mcp_servers:
@@ -59,8 +126,8 @@ mcp_servers:
       OBSIDIAN_API_KEY: "${MCP_OBSIDIAN_API_KEY}"
       OBSIDIAN_BASE_URL: "http://host.docker.internal:27123"
       OBSIDIAN_VERIFY_SSL: "false"
-  qdrant: # semantic memory (Docker service)
-    url: "http://qdrant:6333"
+  # Qdrant semantic memory is reached via the memory-recall skill (direct REST),
+  # not MCP — Qdrant's :6333 endpoint doesn't speak MCP, so no mcp_servers entry.
 
 # Search/scrape are skills (hermes/skills/web-search, web-scrape) that call the
 # SearXNG (:8080) and Crawl4AI (:11235) containers — not config blocks.

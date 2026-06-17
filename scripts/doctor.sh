@@ -74,4 +74,39 @@ fi
 curl -fsS http://127.0.0.1:3737 >/dev/null 2>&1 && ok "Dashboard responding on :3737" \
   || info "Dashboard not responding yet"
 
+# 6) Claude bridge launchd service (24/7 substrate) ---------------------------
+if launchctl print "gui/$(id -u)/com.agenthome.claude-bridge" >/dev/null 2>&1; then
+  ok "Claude bridge launchd service loaded"
+  # No token => expect 401 (fail-closed). A 000 means not listening.
+  code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8765/delegate 2>/dev/null || echo 000)
+  case "$code" in
+    401) ok "Bridge listening on :8765 and rejecting un-tokened requests" ;;
+    000) info "Bridge service loaded but not answering on :8765 yet" ;;
+    *)   bad "Bridge on :8765 returned $code to an un-tokened POST (expected 401)" ;;
+  esac
+else
+  info "Claude bridge service not installed (run scripts/install-bridge-service.sh)"
+fi
+
+# 7) Voice endpoints must be auth-gated ---------------------------------------
+if curl -fsS http://127.0.0.1:8642/health >/dev/null 2>&1; then
+  vcode=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+    http://127.0.0.1:8642/voice/speak -H 'content-type: application/json' \
+    -d '{"text":"probe"}' 2>/dev/null || echo 000)
+  if [ "$vcode" = "401" ]; then
+    ok "Voice endpoints require API key (/voice/speak → 401 un-authed)"
+  elif [ "$vcode" = "000" ]; then
+    info "Voice endpoint probe inconclusive (engine starting?)"
+  else
+    bad "/voice/speak returned $vcode without an API key (expected 401)"
+  fi
+fi
+
+# 8) Gateway exposure safety: never allow-all on an internet-reachable bot ----
+if [ -f "${ENV_FILE}" ] && grep -qiE '^GATEWAY_ALLOW_ALL_USERS=(true|1|yes)' "${ENV_FILE}"; then
+  bad "GATEWAY_ALLOW_ALL_USERS is enabled — any sender can drive the agent. Use *_ALLOWED_USERS instead."
+else
+  ok "No GATEWAY_ALLOW_ALL_USERS override (gateways stay pairing/allowlist-gated)"
+fi
+
 [ "$fail" -eq 0 ] && { ok "All checks passed"; exit 0; } || { bad "Some checks FAILED"; exit 1; }

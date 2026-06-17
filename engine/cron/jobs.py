@@ -626,6 +626,7 @@ def create_job(
     enabled_toolsets: Optional[List[str]] = None,
     workdir: Optional[str] = None,
     no_agent: bool = False,
+    autonomy: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Create a new cron job.
@@ -704,6 +705,11 @@ def create_job(
     normalized_toolsets = normalized_toolsets or None
     normalized_workdir = _normalize_workdir(workdir)
     normalized_no_agent = bool(no_agent)
+    # Autonomy tier for the claude_code runtime permission mode (see
+    # cron/scheduler.py:_resolve_cron_permission_mode). Only "content"/"full"
+    # grant bypass-style autonomy; everything else (incl. None) stays guarded.
+    _autonomy_raw = str(autonomy or "").strip().lower()
+    normalized_autonomy = _autonomy_raw if _autonomy_raw in ("content", "full", "guarded") else None
 
     # no_agent jobs are meaningless without a script — the script IS the job.
     # Surface this as a clear ValueError at create time so bad configs never
@@ -757,6 +763,7 @@ def create_job(
         "origin": origin,  # Tracks where job was created for "origin" delivery
         "enabled_toolsets": normalized_toolsets,
         "workdir": normalized_workdir,
+        "autonomy": normalized_autonomy,
     }
 
     with _jobs_lock():

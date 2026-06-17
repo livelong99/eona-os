@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-home/schemas/tool_manifest.schema.json",
+  "title": "Agent-Tools Platform manifest (tool.yaml)",
+  "description": "CONTRACT (Phase 0). Promotes a Hermes skill into a launchable Tool. Lives beside SKILL.md. Worker W-F implements the loader/validator; the future Workbench renders from this. Keep in lockstep with the Zod mirror.",
+  "type": "object",
+  "required": ["tool", "title", "launch", "steps"],
+  "additionalProperties": false,
+  "properties": {
+    "tool": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$", "description": "Stable tool id." },
+    "title": { "type": "string" },
+    "description": { "type": "string" },
+    "launch": {
+      "type": "object",
+      "required": ["skill"],
+      "additionalProperties": false,
+      "properties": {
+        "skill": { "type": "string", "description": "The skill this tool drives." },
+        "session": { "type": "string", "enum": ["per-tool", "shared"], "default": "per-tool" }
+      }
+    },
+    "inputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "label"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "label": { "type": "string" },
+          "type": { "type": "string", "enum": ["text", "textarea", "file", "file[]", "select"], "default": "text" },
+          "required": { "type": "boolean", "default": false },
+          "options": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ordered workflow steps, derived from the skill's stage table.",
+      "items": {
+        "type": "object",
+        "required": ["id", "title"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "ref": { "type": "string", "description": "Path to the skill reference/stage doc." },
+          "hitl": { "type": "boolean", "default": false, "description": "Human-in-the-loop gate." },
+          "artifacts": { "type": "array", "items": { "type": "string" }, "description": "Output globs this step produces." },
+          "ui": { "type": "string", "enum": ["chat", "form", "artifact-iframe", "file-cards", "custom"], "default": "chat", "description": "Per-step UI hint for the Workbench." }
+        }
+      }
+    },
+    "artifacts_root": { "type": "string", "description": "Template path for outputs, e.g. {project}/resources/branding/Brands/{brand}/" },
+    "brain": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "One-brain wiring: what the tool reads in / writes out.",
+      "properties": {
+        "reads": { "type": "array", "items": { "type": "string" } },
+        "writes": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}
