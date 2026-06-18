@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { AGENTS, NAV, type ViewId } from "@/lib/nav";
 import { getHealth } from "@/lib/hermes";
+import { registerNavigate } from "@/lib/workbench";
 import { VIEW_FADE } from "@/lib/aurora";
 import { Dock } from "@/components/ui/Dock";
 import { CommandBridge } from "@/components/CommandBridge";
@@ -25,6 +26,11 @@ import type { DockItem } from "@/components/ui/contracts";
 export default function Home() {
   const [view, setView] = useState<ViewId>("mission-control");
   const [live, setLive] = useState(false);
+
+  // Let views (e.g. Launchpad → Workbench) request navigation via lib/workbench.
+  useEffect(() => {
+    registerNavigate(setView);
+  }, []);
 
   // Health poll — preserved verbatim.
   useEffect(() => {
