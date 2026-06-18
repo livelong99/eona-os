@@ -1,22 +1,23 @@
 "use client";
 
-// AppShell — spatial root wrapper rendered by layout.tsx.
+// AppShell — root wrapper rendered by layout.tsx (Wave 3).
 //
 // layout.tsx is a Server Component so it cannot directly render client-only
-// primitives (AuroraField, Grain). This thin client wrapper mounts the two
-// background layers and provides the CSS perspective context so every child
-// component's translateZ reads as real depth (§1, §2 of DESIGN-spatial.md).
+// primitives. This thin client wrapper mounts the background + grain layers.
 //
 // Structure (back → front):
-//   AuroraField  z-field (–120px) — drifting aurora orbs, CSS animation
-//   children     z-base  (0)      — the app layout (Sidebar + main)
-//   Grain        z-10 fixed       — film grain overlay
+//   AppBackground  fixed z-0   — dark canvas: rings, aurora orbs, grain SVG
+//   children       z-base      — the app layout (Dock + main content)
+//   Grain          fixed z-10  — additional OLED grain overlay
 //
-// The outer div sets `perspective` + `transform-style: preserve-3d` so the
-// 3D coordinate space is rooted here, not on individual views.
+// AuroraField is retired from the shell in Wave 3 (AppBackground takes over)
+// but AuroraField.tsx is kept on disk for any direct consumers.
+//
+// The outer div retains `perspective` + `transform-style: preserve-3d` for
+// any Wave 2 spatial consumers still in the tree.
 
 import type { ReactNode } from "react";
-import { AuroraField } from "@/components/ui/AuroraField";
+import { AppBackground } from "@/components/ui/AppBackground";
 import { Grain } from "@/components/ui/Grain";
 
 interface AppShellProps {
@@ -32,10 +33,10 @@ export function AppShell({ children }: AppShellProps) {
         transformStyle: "preserve-3d",
       }}
     >
-      {/* Field plane — aurora background, sits behind everything */}
-      <AuroraField />
+      {/* Fixed canvas — dark-glass backdrop (pixel-perfect-hero pattern) */}
+      <AppBackground />
 
-      {/* App layout — Sidebar + main content on the base plane */}
+      {/* App layout — Dock + main content on the base plane */}
       {children}
 
       {/* Grain overlay — OLED tactile film grain, sits atop content */}

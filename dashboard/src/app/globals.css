@@ -2,10 +2,11 @@
 
 /* Agent Home — dark "mission control" theme (matches docs/reference/montages). */
 :root {
-  --background: #0a0b0f;
-  --surface: #111219;
-  --surface-2: #15161f;
-  --border: #232532;
+  /* Deep near-black canvas — deepened for Wave 3 dark-glass */
+  --background: #06070d;
+  --surface: #0e0f17;
+  --surface-2: #131420;
+  --border: #1e1f2e;
   --foreground: #e7e9f0;
   --muted: #8a8fa3;
   --accent: #7c5cff;
@@ -15,15 +16,17 @@
   --aurora-teal: #00d4aa;
   --aurora-indigo: #4f46e5;
 
-  /* Glass surface */
-  --glass-bg: rgba(17, 18, 25, 0.6);
-  --glass-border: rgba(124, 92, 255, 0.18);
-  --glass-blur: 12px;
+  /* Glass surface — darker + richer violet tint for Wave 3 */
+  --glass-bg: rgba(13, 14, 22, 0.65);
+  --glass-border: rgba(124, 92, 255, 0.22);
+  --glass-blur: 16px;
+  /* Inner top highlight — the "lifted pane" edge light */
+  --glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.07);
 
   /* Film grain */
   --grain-opacity: 0.035;
 
-  /* Glow */
+  /* Glow legacy (Wave 2 compat — kept for existing consumers) */
   --glow-accent: rgba(124, 92, 255, 0.35);
   --glow-spread: 0 0 24px var(--glow-accent), 0 0 60px rgba(124, 92, 255, 0.12);
 
@@ -54,9 +57,6 @@
   /* Parallax px budget (§2) */
   --parallax-budget: 24px;
 
-  /* Glass edge-light (top highlight) */
-  --glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.08);
-
   /* Radius scale (§6) */
   --radius-sm: 10px;
   --radius-md: 14px;
@@ -69,15 +69,16 @@
      a richer near-black and tunes the glow scale. The glow shadow is the
      signature: a soft, colored outer halo under glass surfaces. */
 
-  /* Glowing-shadow scale — raise the tier on hover/active. */
-  --glow-sm: 0 2px 12px rgba(124, 92, 255, 0.10);
-  --glow-md: 0 6px 24px rgba(124, 92, 255, 0.16), 0 0 0 1px rgba(124, 92, 255, 0.10);
-  --glow-lg: 0 12px 40px rgba(124, 92, 255, 0.22), 0 0 48px rgba(124, 92, 255, 0.12);
-  --glow-xl: 0 20px 64px rgba(124, 92, 255, 0.30), 0 0 80px rgba(124, 92, 255, 0.16);
+  /* Glowing-shadow scale — Wave 3 signature. Raise the tier on hover/active.
+     lg and xl include a teal accent stop for the depth halo. */
+  --glow-sm: 0 2px 14px rgba(124, 92, 255, 0.13);
+  --glow-md: 0 6px 28px rgba(124, 92, 255, 0.20), 0 0 0 1px rgba(124, 92, 255, 0.11);
+  --glow-lg: 0 14px 48px rgba(124, 92, 255, 0.28), 0 0 56px rgba(0, 212, 170, 0.08);
+  --glow-xl: 0 22px 72px rgba(124, 92, 255, 0.36), 0 0 88px rgba(0, 212, 170, 0.12), 0 0 0 1px rgba(124, 92, 255, 0.18);
 
-  /* Dock chrome (top centered dock). */
-  --dock-bg: rgba(14, 15, 22, 0.72);
-  --dock-border: rgba(255, 255, 255, 0.08);
+  /* Dock chrome (top centered dock) — violet-tinted border instead of plain white. */
+  --dock-bg: rgba(10, 11, 18, 0.80);
+  --dock-border: rgba(124, 92, 255, 0.16);
 }
 
 @theme inline {

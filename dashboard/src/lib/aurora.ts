@@ -111,6 +111,43 @@ export const TRANSITION_PAGE: Transition = {
 };
 
 // ---------------------------------------------------------------------------
+// Dark-Glass vocabulary (Wave 3) — see dashboard/DESIGN-darkglass.md.
+// These supplement (never replace) the Wave 2 exports above.
+// ---------------------------------------------------------------------------
+
+/** Dock icon magnify spring — snappy, zero wobble. */
+export const SPRING_DOCK: Transition = {
+  type: "spring",
+  stiffness: 500,
+  damping: 30,
+  mass: 0.6,
+};
+
+/** Cascade text letter/word entrance stagger. */
+export const SPRING_CASCADE: Transition = {
+  type: "spring",
+  stiffness: 220,
+  damping: 22,
+  mass: 0.9,
+};
+
+/** Glow opacity/opacity micro-fade (200 ms). */
+export const TRANSITION_GLOW: Transition = {
+  duration: 0.2,
+  ease: "easeOut",
+};
+
+/**
+ * View crossfade for dark-glass shell — a gentle lift-in/fade rather than the
+ * Wave 2 camera dolly. page.tsx uses this; VIEW_VARIANTS kept for U2/U3.
+ */
+export const VIEW_FADE: Variants = {
+  initial: { opacity: 0, y: 8 },
+  enter: { opacity: 1, y: 0, transition: TRANSITION_STANDARD },
+  exit: { opacity: 0, y: -6, transition: TRANSITION_MICRO },
+};
+
+// ---------------------------------------------------------------------------
 // CSS variable helpers — reference tokens without hard-coding values.
 // ---------------------------------------------------------------------------
 
@@ -135,10 +172,19 @@ export const AuroraTokens = {
   glassBg: "--glass-bg",
   glassBorder: "--glass-border",
   glassBlur: "--glass-blur",
-  // grain + glow
+  glassEdge: "--glass-edge",
+  // grain + glow (legacy)
   grainOpacity: "--grain-opacity",
   glowAccent: "--glow-accent",
   glowSpread: "--glow-spread",
+  // glow scale (Wave 3)
+  glowSm: "--glow-sm",
+  glowMd: "--glow-md",
+  glowLg: "--glow-lg",
+  glowXl: "--glow-xl",
+  // dock (Wave 3)
+  dockBg: "--dock-bg",
+  dockBorder: "--dock-border",
   // spatial (Wave 2)
   perspective: "--perspective",
   zField: "--z-field",
@@ -153,7 +199,6 @@ export const AuroraTokens = {
   tiltMax: "--tilt-max",
   tiltGlow: "--tilt-glow",
   parallaxBudget: "--parallax-budget",
-  glassEdge: "--glass-edge",
   radiusSm: "--radius-sm",
   radiusMd: "--radius-md",
   radiusLg: "--radius-lg",
