@@ -530,6 +530,15 @@ def run_conversation(
     _plugin_user_context = _ctx.plugin_user_context
     _ext_prefetch_cache = _ctx.ext_prefetch_cache
 
+    # Brain context injection (flag-gated; fail-open; computed once per turn).
+    # Retrieved context is injected as a USER-message block (cache discipline
+    # §5.4 — never into the system prompt).  Gate: HERMES_BRAIN_INJECT=1.
+    try:
+        from agent.brain_inject import get_brain_context as _get_brain_context
+        _brain_context = _get_brain_context(user_message)
+    except Exception:
+        _brain_context = ""
+
     # Main conversation loop counters (pure locals consumed by the loop below).
     api_call_count = 0
     final_response = None
@@ -733,6 +742,10 @@ def run_conversation(
                         _injections.append(_fenced)
                 if _plugin_user_context:
                     _injections.append(_plugin_user_context)
+                # Brain context injection — prepended so vault context arrives
+                # before plugin context and memory blocks.
+                if _brain_context:
+                    _injections.insert(0, _brain_context)
                 if _injections:
                     _base = api_msg.get("content", "")
                     if isinstance(_base, str):

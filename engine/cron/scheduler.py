@@ -1613,6 +1613,55 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
             job_id, job.get("autonomy"), _job_perm_mode,
         )
 
+    # TrustGate — gate autonomous cron acts before the agent is instantiated.
+    # Flag: HERMES_TRUST_GATE=1 (default off).  Fail-safe: any error logs at
+    # WARNING and the job continues normally.  Only irreversible acts (opt-in
+    # via job["irreversible"]=true) are blocked on no-consensus; warn verdicts
+    # log and continue.  Block verdicts raise RuntimeError to abort the job.
+    _trust_gate_enabled = os.environ.get("HERMES_TRUST_GATE", "").strip().lower() in (
+        "1", "true", "yes"
+    )
+    if _trust_gate_enabled:
+        try:
+            from agent.trust_gate import Change, TrustGate
+            _tg_irreversible = bool(job.get("irreversible", False))
+            _tg_change = Change(
+                kind="cron",
+                details={"summary": f"cron job '{job_name}'"},
+                irreversible=_tg_irreversible,
+            )
+            _tg_autonomy = str(job.get("autonomy") or "guarded").strip().lower()
+            _tg_result = TrustGate().gate(
+                _tg_change,
+                targets=[job.get("workdir") or ""],
+                autonomy_tier=_tg_autonomy,  # type: ignore[arg-type]
+            )
+            logger.info(
+                "TrustGate job '%s': verdict=%s require_approval=%s reason=%s",
+                job_name,
+                _tg_result.verdict,
+                _tg_result.require_approval,
+                _tg_result.reason,
+            )
+            if _tg_result.verdict == "block":
+                raise RuntimeError(
+                    f"TrustGate blocked cron job '{job_name}': {_tg_result.reason}"
+                )
+            if _tg_result.require_approval and _tg_result.verdict == "warn":
+                logger.warning(
+                    "TrustGate: job '%s' flagged for human approval: %s",
+                    job_name,
+                    _tg_result.reason,
+                )
+        except RuntimeError:
+            raise  # let block verdicts propagate
+        except Exception as _tg_exc:
+            logger.warning(
+                "TrustGate check failed for job '%s' (fail-safe, continuing): %s",
+                job_name,
+                _tg_exc,
+            )
+
     try:
         # Re-read .env and config.yaml fresh every run so provider/key
         # changes take effect without a gateway restart.
@@ -1692,6 +1741,52 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
 
         # Max iterations
         max_iterations = _cfg.get("agent", {}).get("max_turns") or _cfg.get("max_turns") or 90
+
+        # Budget allocation (flag-gated; fail-safe).
+        # Flag: HERMES_BUDGET_GOVERNOR=1 (default off).
+        # When enabled, derives a Loop from the job config, calls allocate() to
+        # get a per-job turn cap, and reduces max_iterations if the cap is lower.
+        # record_spend() is called after run_conversation returns (see below).
+        _budget_gov_enabled = os.environ.get("HERMES_BUDGET_GOVERNOR", "").strip().lower() in (
+            "1", "true", "yes"
+        )
+        _budget_plan = None
+        _budget_job_loop_name = job_name
+        if _budget_gov_enabled:
+            try:
+                from cron.budget_governor import Loop as _BudgetLoop, RateLimitSignal as _RLSignal, allocate as _bg_allocate
+
+                _bg_budget = int(
+                    os.environ.get("HERMES_CRON_BUDGET", "")
+                    or (_cfg.get("cron", {}) or {}).get("budget", 150)
+                    or 150
+                )
+                _bg_loop = _BudgetLoop(
+                    name=_budget_job_loop_name,
+                    layer=int((job.get("layer") or 4)),
+                    priority=int((job.get("priority") or 2)),
+                    estimated_turns=max_iterations,
+                )
+                _budget_plan = _bg_allocate(
+                    [_bg_loop],
+                    budget=_bg_budget,
+                    signals=[_RLSignal(triggered=False)],
+                )
+                _allocated = dict(_budget_plan.allocations).get(_budget_job_loop_name, max_iterations)
+                if _allocated < max_iterations:
+                    logger.info(
+                        "Job '%s': budget_governor capped max_iterations %d -> %d "
+                        "(budget=%d degraded=%s)",
+                        job_name, max_iterations, _allocated,
+                        _bg_budget, _budget_plan.degraded,
+                    )
+                    max_iterations = _allocated
+            except Exception as _bg_exc:
+                logger.warning(
+                    "Budget governor allocate failed for job '%s' (fail-safe, "
+                    "original max_iterations=%d preserved): %s",
+                    job_name, max_iterations, _bg_exc,
+                )
 
         # Provider routing
         pr = _cfg.get("provider_routing", {})
@@ -1904,6 +1999,23 @@ def run_job(job: dict) -> tuple[bool, str, str, Optional[str]]:
             raise RuntimeError(
                 f"agent.run_conversation returned {type(result).__name__} instead of dict: {result!r}"
             )
+
+        # Budget spend recording (flag-gated; fail-safe).
+        # Records actual api_calls consumed so the ledger can track utilisation
+        # vs allocation over time.  Only fires when HERMES_BUDGET_GOVERNOR=1.
+        if _budget_gov_enabled:
+            try:
+                from cron.budget_governor import record_spend as _bg_record_spend
+                _turns_used = int(result.get("api_calls", 0) or 0)
+                _bg_record_spend(_budget_job_loop_name, turns_used=_turns_used)
+                logger.debug(
+                    "budget_governor: job '%s' used %d turns", job_name, _turns_used
+                )
+            except Exception as _bg_rec_exc:
+                logger.warning(
+                    "budget_governor: record_spend failed for job '%s' (non-fatal): %s",
+                    job_name, _bg_rec_exc,
+                )
 
         # If the agent itself reported failure (e.g. all retries exhausted on
         # API errors, model abort, mid-run interrupt), do not silently mark the
