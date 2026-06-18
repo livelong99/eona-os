@@ -1,28 +1,34 @@
 "use client";
 
+// ChatView — animated AI chat using the ChatComposer + dark-glass message planes.
+//
+// ChatComposer (animated-ai-chat) replaces the old textarea+button row.
+// Message bubbles: TiltCard for streaming agent message, GlassCard for settled,
+// violet-tinted glass for user. All data wiring preserved:
+//   sendMessageStream, speak, MicButton, speakReplies toggle.
+
 import { useRef, useState } from "react";
-import { motion } from "framer-motion";
-import { SendHorizontal, Volume2, VolumeX } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Volume2, VolumeX } from "lucide-react";
 import type { Agent, Message } from "@/lib/types";
 import { sendMessageStream } from "@/lib/hermes";
 import { speak } from "@/lib/voice";
 import { LAYER_ITEM, LAYER_VARIANTS, TRANSITION_MICRO } from "@/lib/aurora";
-import { SpatialStage } from "@/components/ui/SpatialStage";
-import { ParallaxLayer } from "@/components/ui/ParallaxLayer";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { GlowCard } from "@/components/ui/GlowCard";
 import { TiltCard } from "@/components/ui/TiltCard";
 import { Toolbar } from "@/components/ui/Toolbar";
 import { AgentIcon } from "@/components/ui/AgentIcon";
 import { MicButton } from "@/components/ui/MicButton";
 import { TierBadge } from "@/components/ui/TierBadge";
+import { ChatComposer } from "@/components/ui/ChatComposer";
 
 interface ChatViewProps {
   agent: Agent;
 }
 
 // ---------------------------------------------------------------------------
-// MessageBubble — renders one message as a floating glass plane.
-// The actively-streaming agent message gets TiltCard (flat) so it lifts.
+// MessageBubble — one message as a dark-glass floating plane.
 // ---------------------------------------------------------------------------
 
 interface BubbleProps {
@@ -34,26 +40,24 @@ function MessageBubble({ message, isStreaming }: BubbleProps) {
   const isUser = message.role === "user";
 
   if (isUser) {
+    // Right-aligned, violet-tinted glass plane.
     return (
-      // User messages: right-aligned, accent-tinted glass plane.
       <motion.li
         variants={LAYER_ITEM}
         className="self-end"
         style={{ maxWidth: "80%" }}
       >
-        {/* Wrap GlassCard in a div for accent-tint overrides — GlassCard has no style prop. */}
         <div
           style={{
-            background: "rgba(124, 92, 255, 0.18)",
-            borderColor: "rgba(124, 92, 255, 0.35)",
-            color: "var(--foreground)",
+            background: "rgba(124,92,255,0.18)",
+            border: "1px solid rgba(124,92,255,0.35)",
             borderRadius: "var(--radius-xl)",
-            border: "1px solid rgba(124, 92, 255, 0.35)",
             padding: "0.625rem 1rem",
             fontSize: "0.875rem",
+            color: "var(--foreground)",
             backdropFilter: "blur(var(--glass-blur))",
             WebkitBackdropFilter: "blur(var(--glass-blur))",
-            boxShadow: "var(--elev-1), var(--glass-edge)",
+            boxShadow: "var(--glow-sm), var(--glass-edge)",
           }}
         >
           {message.text}
@@ -62,7 +66,7 @@ function MessageBubble({ message, isStreaming }: BubbleProps) {
     );
   }
 
-  // Agent message — raised glass surface when streaming (§9).
+  // Agent streaming — raised TiltCard glows violet (§3 active glow).
   if (isStreaming) {
     return (
       <motion.li
@@ -72,9 +76,13 @@ function MessageBubble({ message, isStreaming }: BubbleProps) {
       >
         <TiltCard flat glow className="px-4 py-2.5 text-sm text-foreground/90">
           {message.text || (
-            <span className="inline-flex items-center gap-1.5 text-muted">
+            <span
+              className="inline-flex items-center gap-1.5"
+              style={{ color: "var(--muted)" }}
+            >
               <span
-                className="h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
+                className="h-1.5 w-1.5 animate-pulse rounded-full"
+                style={{ background: "var(--accent)" }}
                 aria-hidden="true"
               />
               Thinking…
@@ -85,7 +93,7 @@ function MessageBubble({ message, isStreaming }: BubbleProps) {
     );
   }
 
-  // Agent message — settled glass plane.
+  // Agent settled — dark-glass pane.
   return (
     <motion.li
       variants={LAYER_ITEM}
@@ -101,7 +109,7 @@ function MessageBubble({ message, isStreaming }: BubbleProps) {
 
 // ---------------------------------------------------------------------------
 // ChatView — exported component. Export name + props signature unchanged.
-// Data wiring: sendMessageStream, speak, MicButton all preserved.
+// Data wiring: sendMessageStream, speak, MicButton, speakReplies preserved.
 // ---------------------------------------------------------------------------
 
 export function ChatView({ agent }: ChatViewProps) {
@@ -109,11 +117,10 @@ export function ChatView({ agent }: ChatViewProps) {
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [speakReplies, setSpeakReplies] = useState(false);
-  // replyId is tracked to know which message is actively streaming.
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Preserve original submit logic exactly; only add streamingId tracking.
+  // Submit — wiring identical to original; streamingId added.
   async function submit() {
     const text = draft.trim();
     if (!text || busy) return;
@@ -142,7 +149,9 @@ export function ChatView({ agent }: ChatViewProps) {
       const { live } = await sendMessageStream(agent.model, text, (chunk) => {
         acc += chunk;
         setMessages((prev) =>
-          prev.map((m) => (m.id === replyId ? { ...m, text: m.text + chunk } : m)),
+          prev.map((m) =>
+            m.id === replyId ? { ...m, text: m.text + chunk } : m,
+          ),
         );
         bump();
       });
@@ -170,7 +179,7 @@ export function ChatView({ agent }: ChatViewProps) {
     }
   }
 
-  // Toolbar actions: speaker toggle + tier badge.
+  // Toolbar: speaker toggle + tier badge.
   const toolbarActions = (
     <div className="flex items-center gap-3">
       <motion.button
@@ -179,7 +188,7 @@ export function ChatView({ agent }: ChatViewProps) {
         whileTap={{ scale: 0.93 }}
         transition={TRANSITION_MICRO}
         className={[
-          "flex h-9 w-9 items-center justify-center rounded-lg border transition-colors",
+          "flex h-9 w-9 items-center justify-center rounded-lg border transition-colors cursor-pointer",
           speakReplies
             ? "border-accent/60 bg-accent/10 text-accent"
             : "border-border bg-surface text-muted hover:text-foreground/80",
@@ -199,7 +208,7 @@ export function ChatView({ agent }: ChatViewProps) {
   );
 
   return (
-    <SpatialStage className="flex h-full flex-col">
+    <div className="flex h-full flex-col">
       <Toolbar
         icon={<AgentIcon agent={agent} size="lg" />}
         title={agent.name}
@@ -207,93 +216,81 @@ export function ChatView({ agent }: ChatViewProps) {
         actions={toolbarActions}
       />
 
-      {/* Message list — mild parallax makes the plane feel floating.
-          ParallaxLayer has no style prop; className drives flex layout. */}
-      <ParallaxLayer
-        depth={0.04}
-        plane="base"
-        className="flex flex-1 flex-col overflow-hidden"
+      {/* Message list — dark-glass scrollable area */}
+      <GlowCard
+        as="section"
+        glow="sm"
+        className="mx-4 my-3 flex flex-1 flex-col overflow-hidden"
+        aria-label="Chat messages"
       >
         <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-5">
-          {messages.length === 0 ? (
-            <div className="mx-auto mt-16 max-w-md text-center text-sm text-muted">
-              <p className="mb-1 text-foreground/80">
-                Start a conversation with {agent.name}.
-              </p>
-              <p>
-                Model{" "}
-                <code
-                  style={{
-                    fontFamily: "var(--font-mono)",
-                    fontSize: "0.75rem",
-                    background: "var(--surface-2)",
-                    borderRadius: "var(--radius-sm)",
-                    padding: "0.125rem 0.375rem",
-                  }}
-                >
-                  {agent.model}
-                </code>
-              </p>
-            </div>
-          ) : (
-            <motion.ul
-              variants={LAYER_VARIANTS}
-              initial="hidden"
-              animate="visible"
-              className="mx-auto flex max-w-2xl flex-col gap-4"
-            >
-              {messages.map((m) => (
-                <MessageBubble
-                  key={m.id}
-                  message={m}
-                  isStreaming={m.id === streamingId && busy}
-                />
-              ))}
-            </motion.ul>
-          )}
+          <AnimatePresence>
+            {messages.length === 0 ? (
+              <motion.div
+                key="empty"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="mx-auto mt-16 max-w-md text-center text-sm"
+                style={{ color: "var(--muted)" }}
+              >
+                <p className="mb-1" style={{ color: "var(--foreground)" }}>
+                  Start a conversation with {agent.name}.
+                </p>
+                <p>
+                  Model{" "}
+                  <code
+                    style={{
+                      fontFamily: "var(--font-mono)",
+                      fontSize: "0.75rem",
+                      background: "var(--surface-2)",
+                      borderRadius: "var(--radius-sm)",
+                      padding: "0.125rem 0.375rem",
+                    }}
+                  >
+                    {agent.model}
+                  </code>
+                </p>
+              </motion.div>
+            ) : (
+              <motion.ul
+                key="messages"
+                variants={LAYER_VARIANTS}
+                initial="hidden"
+                animate="visible"
+                className="mx-auto flex max-w-2xl flex-col gap-4"
+              >
+                {messages.map((m) => (
+                  <MessageBubble
+                    key={m.id}
+                    message={m}
+                    isStreaming={m.id === streamingId && busy}
+                  />
+                ))}
+              </motion.ul>
+            )}
+          </AnimatePresence>
         </div>
-      </ParallaxLayer>
+      </GlowCard>
 
-      {/* Input bar — glass panel anchored at the bottom.
-          Override border-radius to 0 via Tailwind since GlassCard has no style prop. */}
-      <GlassCard
-        as="aside"
-        elevation={2}
-        className="px-6 py-4 !rounded-none"
-      >
-        <div className="mx-auto flex max-w-2xl items-end gap-2">
-          <MicButton
-            onTranscript={(t) =>
-              setDraft((d) => (d.trim() ? `${d} ${t}` : t))
-            }
-            disabled={busy}
-          />
-          <textarea
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                void submit();
+      {/* ChatComposer anchored at the bottom — leading = MicButton */}
+      <div className="px-4 pb-4">
+        <ChatComposer
+          value={draft}
+          onChange={setDraft}
+          onSubmit={() => void submit()}
+          disabled={busy}
+          placeholder={`Message ${agent.name}…`}
+          leading={
+            <MicButton
+              onTranscript={(t) =>
+                setDraft((d) => (d.trim() ? `${d} ${t}` : t))
               }
-            }}
-            rows={1}
-            placeholder={`Message ${agent.name}…`}
-            className="min-h-[44px] flex-1 resize-none rounded-xl border border-border bg-surface px-3 py-2.5 text-sm outline-none placeholder:text-muted focus:border-accent/60"
-          />
-          <motion.button
-            type="button"
-            onClick={() => void submit()}
-            disabled={busy || !draft.trim()}
-            whileTap={{ scale: 0.9 }}
-            transition={TRANSITION_MICRO}
-            className="flex h-11 w-11 items-center justify-center rounded-xl bg-accent text-white transition-opacity disabled:opacity-40"
-            aria-label="Send"
-          >
-            <SendHorizontal className="h-4 w-4" />
-          </motion.button>
-        </div>
-      </GlassCard>
-    </SpatialStage>
+              disabled={busy}
+            />
+          }
+        />
+      </div>
+    </div>
   );
 }

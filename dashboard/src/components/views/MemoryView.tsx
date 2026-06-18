@@ -1,5 +1,12 @@
 "use client";
 
+// MemoryView — dark-glass reskin (Wave 3).
+//
+// Shell: GlowCard outer frame + CascadeHeading screen title.
+// Graph internals (SpatialStage, ParallaxLayer, MemoryNodeDot, EdgeOverlay)
+// are untouched — they ARE the dark-glass visualization surface.
+// Data wiring: getMemory() preserved exactly.
+
 import { useEffect, useMemo, useState } from "react";
 import { motion, useReducedMotion, useSpring } from "framer-motion";
 import type { MemoryGraph, MemoryNode } from "@/lib/types";
@@ -7,6 +14,8 @@ import { getMemory } from "@/lib/hermes";
 import { SpatialStage, useSpatialPointer } from "@/components/ui/SpatialStage";
 import { ParallaxLayer } from "@/components/ui/ParallaxLayer";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { GlowCard } from "@/components/ui/GlowCard";
+import { CascadeHeading } from "@/components/ui/CascadeHeading";
 import { Toolbar } from "@/components/ui/Toolbar";
 import { LivePill } from "@/components/ui/LivePill";
 import { SPRING_TILT } from "@/lib/aurora";
@@ -235,7 +244,9 @@ function BackgroundOrbs() {
 
 // ---------------------------------------------------------------------------
 // MemoryView — exported component. Export name + props signature unchanged.
-// Data wiring: getMemory() call preserved exactly as in the original.
+// Data wiring: getMemory() call preserved exactly.
+// Shell reskinned to dark-glass: GlowCard outer frame + CascadeHeading title.
+// Graph internals (SpatialStage, ParallaxLayer, nodes, edges) unchanged.
 // ---------------------------------------------------------------------------
 
 export function MemoryView() {
@@ -267,25 +278,34 @@ export function MemoryView() {
 
   return (
     <div className="flex h-full flex-col">
+      {/* Dark-glass header: CascadeHeading title + toolbar strip */}
       <Toolbar
-        icon={<Brain className="h-4 w-4" />}
+        icon={<Brain className="h-4 w-4 text-accent" />}
         title="Memory"
         subtitle="Obsidian vault knowledge graph · shared brain"
         actions={<LivePill live={live} />}
       />
 
-      {/* Star-field canvas */}
-      <div
-        className="relative flex-1 overflow-hidden"
-        style={{ background: "var(--background)" }}
+      {/* CascadeHeading screen title — Wave 3 dark-glass convention */}
+      <div className="px-6 pt-2 pb-1">
+        <CascadeHeading text="Knowledge Graph" level={2} />
+      </div>
+
+      {/* Outer glass frame — GlowCard wraps the star-field canvas */}
+      <GlowCard
+        as="section"
+        glow="sm"
+        className="relative mx-4 mb-4 flex-1 overflow-hidden"
+        aria-label="Memory knowledge graph"
       >
+        {/* Star-field canvas — internals preserved exactly */}
         <SpatialStage className="absolute inset-0">
-          {/* Field plane — background aurora orbs, barely move (factor 0.02) */}
+          {/* Field plane — background aurora orbs */}
           <ParallaxLayer depth={0.02} plane="field" className="absolute inset-0">
             <BackgroundOrbs />
           </ParallaxLayer>
 
-          {/* Back plane — SVG edge overlay (single layer, no per-edge parallax) */}
+          {/* Back plane — SVG edge overlay */}
           <ParallaxLayer depth={0.05} plane="back" className="absolute inset-0">
             {graph && <EdgeOverlay graph={graph} />}
           </ParallaxLayer>
@@ -342,14 +362,14 @@ export function MemoryView() {
           </ParallaxLayer>
         </SpatialStage>
 
-        {/* Node count hint */}
+        {/* Node count hint — overlaid on the glass frame */}
         <p
           className="pointer-events-none absolute bottom-3 left-6 text-xs"
           style={{ color: "var(--muted)" }}
         >
           {nodeCount} notes · hover a node to label it
         </p>
-      </div>
+      </GlowCard>
     </div>
   );
 }
