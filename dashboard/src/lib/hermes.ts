@@ -8,7 +8,14 @@
 // kanban or a memory graph. Those live in the dashboard backend (9119, auth-gated)
 // or the kanban CLI/DB. So getTasks()/getMemory() use mock data until we wire the
 // 9119 API; getHealth()/sendMessage()/startRun() are real.
-import type { MemoryGraph, Message, Task, TaskEvent } from "./types";
+import type {
+  MemoryGraph,
+  Message,
+  RunEvent,
+  RunEventKind,
+  Task,
+  TaskEvent,
+} from "./types";
 import { MOCK_EVENTS, MOCK_MEMORY, MOCK_TASKS } from "./mock";
 
 // Same-origin proxy (src/app/api/hermes/[...path]/route.ts) forwards to the
@@ -176,6 +183,83 @@ export function streamRunEvents(
       });
     } catch {
       /* ignore non-JSON keepalives */
+    }
+  };
+  return () => es.close();
+}
+
+// --- Typed RunEvent stream (Glass Cockpit) -----------------------------------
+// The engine emits the full RunEvent shape (engine/agent/run_events.py) as
+// `data: <json>` SSE frames using snake_case keys. This parser maps them to the
+// camelCase TS `RunEvent` and tolerates unknown kinds / extra fields — consumers
+// render generically and never crash on an event they don't recognise.
+
+function num(v: unknown): number | undefined {
+  return typeof v === "number" ? v : undefined;
+}
+function str(v: unknown): string | undefined {
+  return typeof v === "string" ? v : undefined;
+}
+function strList(v: unknown): string[] | undefined {
+  return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : undefined;
+}
+
+/** Map one wire frame (snake_case) into a typed RunEvent, or null if unusable. */
+function toRunEvent(raw: Record<string, unknown>): RunEvent | null {
+  const kind = raw.event ?? raw.kind ?? raw.type;
+  if (typeof kind !== "string") return null;
+  // Normalise unix-seconds → ms so timestamps compose with Date.now().
+  const tsRaw = num(raw.timestamp);
+  const timestamp =
+    tsRaw === undefined ? Date.now() : tsRaw < 1e12 ? tsRaw * 1000 : tsRaw;
+  const errRaw = raw.error;
+  return {
+    event: kind as RunEventKind,
+    runId: str(raw.run_id) ?? str(raw.runId) ?? "",
+    timestamp,
+    text: str(raw.text),
+    tool: str(raw.tool),
+    preview: str(raw.preview),
+    duration: num(raw.duration),
+    error:
+      typeof errRaw === "boolean" || typeof errRaw === "string" ? errRaw : undefined,
+    path: str(raw.path),
+    patch: str(raw.patch),
+    spanId: str(raw.span_id) ?? str(raw.spanId),
+    parentToolUseId:
+      raw.parent_tool_use_id === null ? null : str(raw.parent_tool_use_id),
+    subagentType: str(raw.subagent_type) ?? str(raw.subagentType),
+    model: str(raw.model),
+    tools: strList(raw.tools),
+    mcpServers: strList(raw.mcp_servers) ?? strList(raw.mcpServers),
+    choices: strList(raw.choices),
+    choice: str(raw.choice),
+    output: str(raw.output),
+    usage:
+      raw.usage && typeof raw.usage === "object"
+        ? (raw.usage as Record<string, unknown>)
+        : undefined,
+  };
+}
+
+/**
+ * Stream a run's typed RunEvents (GET /v1/runs/{id}/events). Unlike
+ * streamRunEvents (which flattens to TaskEvent), this preserves every field so
+ * the Glass Cockpit can render reasoning, tools, diffs, terminals, sub-agents
+ * and approvals distinctly. Returns an unsubscribe fn.
+ */
+export function streamRunEventsTyped(
+  runId: string,
+  onEvent: (e: RunEvent) => void,
+): () => void {
+  const es = new EventSource(`${BASE}/v1/runs/${runId}/events`);
+  es.onmessage = (ev) => {
+    try {
+      const raw = JSON.parse(ev.data) as Record<string, unknown>;
+      const parsed = toRunEvent(raw);
+      if (parsed) onEvent({ ...parsed, runId: parsed.runId || runId });
+    } catch {
+      /* ignore keepalive comments and non-JSON frames */
     }
   };
   return () => es.close();

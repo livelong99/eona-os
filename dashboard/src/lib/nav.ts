@@ -4,6 +4,7 @@ import type { Agent, Tier, TierMeta } from "./types";
 
 export type ViewId =
   | "mission-control"
+  | "cockpit"
   | "kanban"
   | "agent:claude"
   | "prompt-foundry"
@@ -12,6 +13,7 @@ export type ViewId =
 
 export type IconName =
   | "grid"
+  | "cockpit"
   | "kanban"
   | "sparkles"
   | "share2"
@@ -51,6 +53,7 @@ export const NAV: NavGroup[] = [
     heading: "Workspace",
     items: [
       { id: "mission-control", label: "Mission Control", icon: "grid" },
+      { id: "cockpit", label: "Cockpit", icon: "cockpit" },
       { id: "kanban", label: "Kanban", icon: "kanban" },
     ],
   },

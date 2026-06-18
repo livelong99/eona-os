@@ -2,6 +2,7 @@ import {
   Bot,
   Kanban,
   LayoutGrid,
+  Radio,
   Share2,
   Sparkles,
   Target,
@@ -11,6 +12,7 @@ import type { IconName } from "@/lib/nav";
 
 const MAP: Record<IconName, LucideIcon> = {
   grid: LayoutGrid,
+  cockpit: Radio,
   kanban: Kanban,
   sparkles: Sparkles,
   share2: Share2,

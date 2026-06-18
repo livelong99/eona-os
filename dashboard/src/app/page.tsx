@@ -5,6 +5,7 @@ import { AGENTS, type ViewId } from "@/lib/nav";
 import { getHealth } from "@/lib/hermes";
 import { Sidebar } from "@/components/Sidebar";
 import { MissionControl } from "@/components/views/MissionControl";
+import { CockpitView } from "@/components/views/CockpitView";
 import { KanbanView } from "@/components/views/KanbanView";
 import { ChatView } from "@/components/views/ChatView";
 import { MemoryView } from "@/components/views/MemoryView";
@@ -44,6 +45,8 @@ function renderView(view: ViewId, onSelect: (id: ViewId) => void) {
   switch (view) {
     case "mission-control":
       return <MissionControl onSelect={onSelect} />;
+    case "cockpit":
+      return <CockpitView />;
     case "kanban":
       return <KanbanView />;
     case "memory":
