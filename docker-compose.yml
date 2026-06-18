@@ -33,6 +33,10 @@ services:
       - QDRANT_URL=http://qdrant:6333
       - CLAUDE_BRIDGE_URL=http://host.docker.internal:8765 # host-side Claude Code bridge
       - HERMES_TOOL_ROOTS=/opt/skills # where tool.yaml manifests are discovered (Launchpad)
+      # Safety substrate (B1) — active in production; both are fail-safe + conservative.
+      - HERMES_TRUST_GATE=1 # gate autonomous/cron acts (blocks irreversible, logs decisions)
+      - HERMES_BUDGET_GOVERNOR=1 # allocate compute budget per cron job + record spend
+      # HERMES_BRAIN_INJECT left OFF until the brain stores are indexed (cold = latency, no gain)
     volumes:
       # Official data dir: holds config.yaml, .env, sessions, memory, skills.
       # scripts/install.sh seeds ~/.hermes from hermes/ (config, .env, skills, profiles).
