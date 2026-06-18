@@ -9,6 +9,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ShieldAlert, ShieldCheck } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
+import { GlowCard } from "@/components/ui/GlowCard";
+import { CascadeHeading } from "@/components/ui/CascadeHeading";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { SPRING_GENTLE } from "@/lib/aurora";
 import { getApprovals, respondApproval } from "@/lib/hermes";
@@ -140,16 +142,13 @@ function PendingCard({ item, onRespond }: ApprovalCardProps) {
 
 function ResolvedCard({ item }: { item: ApprovalItem }) {
   return (
-    <div
-      style={{
-        background: "var(--glass-bg)",
-        border: "1px solid var(--glass-border)",
-        borderRadius: "var(--radius-lg)",
-      }}
+    <GlowCard
+      as="div"
+      glow="sm"
       className="flex items-center gap-3 px-4 py-2.5"
     >
       <ShieldCheck className="h-3.5 w-3.5 shrink-0 text-emerald-400" aria-hidden />
-      <p className="min-w-0 flex-1 truncate text-xs text-muted">
+      <p className="min-w-0 flex-1 truncate text-xs" style={{ color: "var(--muted)" }}>
         {item.text ?? `Run ${item.runId}`}
       </p>
       <span
@@ -160,7 +159,7 @@ function ResolvedCard({ item }: { item: ApprovalItem }) {
       >
         {item.respondedChoice}
       </span>
-    </div>
+    </GlowCard>
   );
 }
 
@@ -216,17 +215,16 @@ export function TrustRailView() {
   return (
     <div className="flex flex-col h-full px-8 py-7 overflow-y-auto">
       {/* Header */}
-      <div className="flex items-center gap-3 mb-6">
-        <h1 className="text-2xl font-semibold leading-tight text-foreground">
-          Trust Rail
-        </h1>
-        <p className="text-sm text-muted">
-          Agent approval requests
-        </p>
+      <div className="flex items-center gap-4 mb-6">
+        <CascadeHeading
+          text="Trust Rail"
+          subtitle="Agent approval requests"
+          level={1}
+        />
         {pending.length > 0 && (
           <span
             className={[
-              "ml-auto rounded-full px-2.5 py-0.5 text-xs font-semibold",
+              "self-start mt-1 ml-auto rounded-full px-2.5 py-0.5 text-xs font-semibold",
               "bg-amber-500/20 text-amber-300 border border-amber-500/30",
             ].join(" ")}
           >

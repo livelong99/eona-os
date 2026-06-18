@@ -87,6 +87,14 @@ export async function getTools(): Promise<{ tools: ToolManifest[]; live: boolean
   return { tools: SAMPLE_TOOLS, live: false };
 }
 
+/** Look up a single manifest by id from an already-loaded tools array. */
+export function findTool(
+  id: string,
+  tools: ToolManifest[],
+): ToolManifest | undefined {
+  return tools.find((t) => t.id === id);
+}
+
 // ---------------------------------------------------------------------------
 // Bundled sample — derived from the real brand-maker fixture
 // (tests/tools/fixtures/gds-agent-brand-maker/tool.yaml).
