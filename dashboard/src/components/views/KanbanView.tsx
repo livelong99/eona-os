@@ -1,18 +1,25 @@
 "use client";
 
+// KanbanView — dark-glass reskin (Wave 3).
+//
+// Wave 2 → Wave 3 changes:
+//   • SpatialStage / ParallaxLayer removed — glass + glow provides depth
+//   • Toolbar replaced with CascadeHeading + inline LivePill
+//   • Task cards: TiltCard → GlowCard (glow "sm", raises on hover)
+//   • Column troughs: GlassCard kept (correct back-plane glass panel)
+//   • Live event ticker: GlassCard kept
+//   • All live data wiring (getTasks / subscribeEvents) preserved verbatim
+
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
-import { LayoutDashboard } from "lucide-react";
 import { KANBAN_COLUMNS, type Task, type TaskEvent } from "@/lib/types";
 import { getTasks, subscribeEvents } from "@/lib/hermes";
 import { AGENTS } from "@/lib/nav";
 import { AgentIcon } from "@/components/ui/AgentIcon";
 import { LivePill } from "@/components/ui/LivePill";
-import { SpatialStage } from "@/components/ui/SpatialStage";
-import { ParallaxLayer } from "@/components/ui/ParallaxLayer";
-import { TiltCard } from "@/components/ui/TiltCard";
+import { CascadeHeading } from "@/components/ui/CascadeHeading";
+import { GlowCard } from "@/components/ui/GlowCard";
 import { GlassCard } from "@/components/ui/GlassCard";
-import { Toolbar } from "@/components/ui/Toolbar";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { LAYER_VARIANTS, LAYER_ITEM } from "@/lib/aurora";
 
@@ -39,25 +46,24 @@ export function KanbanView() {
 
   return (
     <div className="flex h-full flex-col">
-      <Toolbar
-        icon={<LayoutDashboard className="h-4 w-4" />}
-        title="Kanban"
-        subtitle="Hermes dispatcher · one prompt → many profiles"
-        actions={<LivePill live={live} />}
-      />
+      {/* Screen heading with live pill */}
+      <div className="flex items-end justify-between px-8 pt-8 pb-4">
+        <CascadeHeading
+          text="Kanban"
+          subtitle="Hermes dispatcher · one prompt → many profiles"
+        />
+        <div className="mb-1">
+          <LivePill live={live} />
+        </div>
+      </div>
 
-      {/* Board — SpatialStage provides depth context for columns + cards */}
-      <SpatialStage className="flex-1 overflow-x-auto px-6 py-5">
-        <div className="flex min-w-max gap-4">
+      {/* Board — scrollable horizontally; columns are glass troughs */}
+      <div className="flex-1 overflow-x-auto px-6 pb-4">
+        <div className="flex min-w-max gap-4 pb-2">
           {KANBAN_COLUMNS.map((col) => {
             const colTasks = tasks.filter((t) => t.status === col.status);
             return (
-              <ParallaxLayer
-                key={col.status}
-                depth={0.06}
-                plane="back"
-                className="w-64 shrink-0"
-              >
+              <div key={col.status} className="w-64 shrink-0">
                 {/* Column trough — back-plane glass panel */}
                 <GlassCard elevation={1} className="flex flex-col gap-2 p-3">
                   <div className="mb-1 flex items-center justify-between px-1">
@@ -82,8 +88,13 @@ export function KanbanView() {
                     >
                       {colTasks.map((t) => (
                         <motion.li key={t.id} variants={LAYER_ITEM}>
-                          {/* Task card — lifts toward viewer on hover */}
-                          <TiltCard className="p-3" aria-label={t.title}>
+                          {/* Task card — GlowCard raises glow tier on hover */}
+                          <GlowCard
+                            as="li"
+                            glow="sm"
+                            aria-label={t.title}
+                            className="p-3"
+                          >
                             <p className="text-sm text-foreground/90">{t.title}</p>
                             {t.assignee && (
                               <div className="mt-2 flex items-center gap-1.5 text-xs text-muted">
@@ -95,17 +106,17 @@ export function KanbanView() {
                                 {t.assignee}
                               </div>
                             )}
-                          </TiltCard>
+                          </GlowCard>
                         </motion.li>
                       ))}
                     </motion.ul>
                   )}
                 </GlassCard>
-              </ParallaxLayer>
+              </div>
             );
           })}
         </div>
-      </SpatialStage>
+      </div>
 
       {/* Live event ticker — glass footer panel */}
       <GlassCard

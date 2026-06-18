@@ -84,14 +84,15 @@ export function CockpitEvent({ row }: CockpitEventProps) {
         backdropFilter: "blur(var(--glass-blur))",
         WebkitBackdropFilter: "blur(var(--glass-blur))",
         borderRadius: "var(--radius-md)",
-        boxShadow: "var(--elev-1), var(--glass-edge)",
+        // Wave 3: glow-sm at rest; glow-md on hover (via class override below)
+        boxShadow: "var(--glow-sm), var(--glass-edge)",
       }}
       className={[
         "flex gap-3 border border-[var(--glass-border)] px-3 py-2.5",
         // Left accent strip by event kind — 2px colored left border.
         `border-l-2 ${borderTint}`,
         "transition-[border-color,box-shadow] duration-200",
-        "hover:shadow-[var(--elev-2),var(--glass-edge)]",
+        "hover:[box-shadow:var(--glow-md),var(--glass-edge)]",
       ].join(" ")}
     >
       <div className="flex flex-col items-center pt-0.5">
