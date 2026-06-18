@@ -319,6 +319,45 @@ export async function respondApproval(
   return res !== null;
 }
 
+// --- Tool launch (Workbench) + Goal run -------------------------------------
+// Start a run bound to a tool (POST /v1/tools/{id}/launch) or a goal objective
+// (POST /v1/goal). Both return a runId the caller then streams via
+// streamRunEventsTyped(runId, …). Mirrors the startRun contract.
+
+export async function launchTool(
+  toolId: string,
+  inputs: Record<string, unknown> = {},
+): Promise<{ runId: string | null; live: boolean }> {
+  const data = await tryFetch<{ run_id?: string; id?: string }>(
+    `/v1/tools/${encodeURIComponent(toolId)}/launch`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ inputs }),
+    },
+    CHAT_TIMEOUT_MS,
+  );
+  const runId = data?.run_id ?? data?.id ?? null;
+  return { runId, live: runId !== null };
+}
+
+export async function startGoal(
+  objective: string,
+  maxTurns?: number,
+): Promise<{ runId: string | null; sessionId: string | null; live: boolean }> {
+  const data = await tryFetch<{ run_id?: string; session_id?: string }>(
+    "/v1/goal",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ objective, ...(maxTurns ? { max_turns: maxTurns } : {}) }),
+    },
+    CHAT_TIMEOUT_MS,
+  );
+  const runId = data?.run_id ?? null;
+  return { runId, sessionId: data?.session_id ?? null, live: runId !== null };
+}
+
 /**
  * Subscribe to the global Kanban event stream (GET /v1/events, SSE).
  * Falls back to the mock ticker when the engine is unreachable so the
