@@ -15,6 +15,7 @@ import { MemoryView } from "@/components/views/MemoryView";
 import { PromptFoundryView } from "@/components/views/PromptFoundryView";
 import { GoalModeView } from "@/components/views/GoalModeView";
 import { LaunchpadView } from "@/components/views/LaunchpadView";
+import { WorkbenchView } from "@/components/views/WorkbenchView";
 import { TrustRailView } from "@/components/views/TrustRailView";
 
 export default function Home() {
@@ -90,6 +91,8 @@ function renderView(view: ViewId, onSelect: (id: ViewId) => void) {
       return <GoalModeView />;
     case "launchpad":
       return <LaunchpadView />;
+    case "workbench":
+      return <WorkbenchView />;
     case "trust-rail":
       return <TrustRailView />;
     default:

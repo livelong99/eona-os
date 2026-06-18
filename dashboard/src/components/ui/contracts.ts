@@ -114,3 +114,110 @@ export interface CommandPaletteProps {
   /** Optional async source for query-driven results (e.g. memory search). */
   onQueryChange?: (q: string) => void;
 }
+
+// ===========================================================================
+// Dark-Glass primitives (Wave 3) — CONTRACT. U1 builds the implementations
+// (adapting the named 21st.dev components); U2/U3/U4 compose against these.
+// See dashboard/DESIGN-darkglass.md. Props must stay assignable to these.
+// ===========================================================================
+
+/** Glow elevation tier — maps to the --glow-* token scale. */
+export type GlowTier = "sm" | "md" | "lg" | "xl";
+
+/** A primary-nav destination shown in the top Dock (21st: badtzx0/dock). */
+export interface DockItem {
+  id: string;
+  label: string;
+  icon: ReactNode;
+  active?: boolean;
+  onSelect: () => void;
+}
+
+/** Dock — top centered horizontal nav (replaces the sidebar). */
+export interface DockProps {
+  items: DockItem[];
+  /** Optional trailing action (e.g. ⌘K Command Bridge launcher). */
+  trailing?: ReactNode;
+  className?: string;
+}
+
+/** GlowCard — the base dark-glass surface with a colored outer glow. */
+export interface GlowCardProps {
+  children: ReactNode;
+  className?: string;
+  /** Resting glow tier (raises on hover). Default "sm". */
+  glow?: GlowTier;
+  /** Persistent (selected/active) — glow doesn't reset on mouse-leave. */
+  active?: boolean;
+  onClick?: () => void;
+  as?: "div" | "button" | "article" | "li" | "section";
+  "aria-label"?: string;
+}
+
+/** CascadeHeading — animated screen title (21st: aayush-duhan/cascade-text). */
+export interface CascadeHeadingProps {
+  text: string;
+  /** Smaller subtitle rendered under the cascade title. */
+  subtitle?: ReactNode;
+  /** Heading level for a11y (visual size is fixed by the design). Default 1. */
+  level?: 1 | 2;
+  className?: string;
+}
+
+/** AppBackground — fixed canvas layer (21st: easemize/pixel-perfect-hero). */
+export interface AppBackgroundProps {
+  className?: string;
+}
+
+/** A tool tile in the Launchpad (21st: edwinvakayil/new-card). */
+export interface ToolCardProps {
+  id: string;
+  title: string;
+  blurb?: string;
+  /** Stage chips: { label, hitl }. */
+  stages?: { label: string; hitl?: boolean }[];
+  onLaunch: (id: string) => void;
+  className?: string;
+}
+
+/** One section in the MD table-of-contents viewer. */
+export interface MDHeading {
+  id: string;
+  text: string;
+  level: number;
+}
+
+/** MDViewer — markdown reader with a TOC rail (21st: reapollo/table-of-contents). */
+export interface MDViewerProps {
+  /** Raw markdown to render. */
+  markdown: string;
+  /** Optional title shown above the body. */
+  title?: string;
+  className?: string;
+}
+
+/** One step in a coding/tool plan (21st: isaiahbjork/agent-plan). */
+export interface PlanStep {
+  id: string;
+  title: string;
+  status: "pending" | "running" | "done" | "error";
+  detail?: string;
+}
+
+/** AgentPlan — checklist/plan-state pane for the Cockpit. */
+export interface AgentPlanProps {
+  steps: PlanStep[];
+  className?: string;
+}
+
+/** ChatComposer — animated chat input (21st: jatin-yadav05/animated-ai-chat). */
+export interface ChatComposerProps {
+  value: string;
+  onChange: (v: string) => void;
+  onSubmit: () => void;
+  disabled?: boolean;
+  placeholder?: string;
+  /** Optional leading control (e.g. mic button). */
+  leading?: ReactNode;
+  className?: string;
+}

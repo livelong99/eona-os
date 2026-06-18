@@ -323,12 +323,41 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
                 })
         return web.json_response({"approvals": out})
 
+    # ------------------------------------------------------------------
+    # POST /v1/tools/{tool_id}/launch — start a run bound to a tool's skill
+    # session, for the Workbench (Wave 3). CONTRACT (Phase 0): stub returns
+    # 501; Worker B2 implements (load manifest by id, start a run with the
+    # tool's launch.skill + per-tool session, return {run_id}).
+    # ------------------------------------------------------------------
+    async def _tool_launch(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        return web.json_response(
+            {"error": "not_implemented", "detail": "tool launch lands in Wave 3 (B2)"},
+            status=501,
+        )
+
+    # ------------------------------------------------------------------
+    # POST /v1/goal — start a goal-mode run (objective + judge loop) for
+    # the Goal Mode surface. CONTRACT (Phase 0): stub returns 501; Worker
+    # B2 implements (start a run, stream judge verdicts per turn).
+    # ------------------------------------------------------------------
+    async def _goal(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        return web.json_response(
+            {"error": "not_implemented", "detail": "goal run lands in Wave 3 (B2)"},
+            status=501,
+        )
+
     app.router.add_get("/v1/tasks", _tasks)
     app.router.add_get("/v1/memory", _memory)
     app.router.add_get("/v1/events", _events)
     app.router.add_get("/v1/tools", _tools)
     app.router.add_get("/v1/approvals", _approvals)
+    app.router.add_post("/v1/tools/{tool_id}/launch", _tool_launch)
+    app.router.add_post("/v1/goal", _goal)
     logger.debug(
-        "dashboard data routes registered "
-        "(/v1/tasks, /v1/memory, /v1/events, /v1/tools, /v1/approvals)"
+        "dashboard data routes registered (/v1/tasks, /v1/memory, /v1/events, "
+        "/v1/tools, /v1/approvals, /v1/tools/{id}/launch, /v1/goal)"
     )

@@ -11,6 +11,7 @@ export type ViewId =
   | "memory"
   | "goal-mode"
   | "launchpad"
+  | "workbench"
   | "trust-rail";
 
 export type IconName =
@@ -22,6 +23,7 @@ export type IconName =
   | "target"
   | "bot"
   | "rocket"
+  | "wrench"
   | "shield";
 
 export interface NavItem {
@@ -73,6 +75,7 @@ export const NAV: NavGroup[] = [
     heading: "Studio",
     items: [
       { id: "launchpad", label: "Launchpad", icon: "rocket", hint: "Browse and launch agent tools" },
+      { id: "workbench", label: "Workbench", icon: "wrench", hint: "Drive a tool through its steps" },
       { id: "trust-rail", label: "Trust Rail", icon: "shield", hint: "Review and approve agent actions" },
     ],
   },

@@ -8,6 +8,7 @@ import {
   Shield,
   Sparkles,
   Target,
+  Wrench,
   type LucideIcon,
 } from "lucide-react";
 import type { IconName } from "@/lib/nav";
@@ -21,6 +22,7 @@ const MAP: Record<IconName, LucideIcon> = {
   target: Target,
   bot: Bot,
   rocket: Rocket,
+  wrench: Wrench,
   shield: Shield,
 };
 
