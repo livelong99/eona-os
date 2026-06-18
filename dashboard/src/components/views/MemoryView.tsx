@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion, useReducedMotion, useSpring } from "framer-motion";
 import type { MemoryGraph, MemoryNode } from "@/lib/types";
 import { getMemory } from "@/lib/hermes";
@@ -77,14 +77,6 @@ function MemoryNodeDot({ node, band, hovered, onHover }: NodeProps) {
       nudgeY.set(p.y * 6);
     });
   }, [isStatic, hovered, subscribe, nudgeX, nudgeY]);
-
-  // Cleanup any dangling rAF on unmount.
-  const rafRef = useRef<number | null>(null);
-  useEffect(() => {
-    return () => {
-      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-    };
-  }, []);
 
   const r = 4 + node.weight * 6;
   const opacity = BAND_OPACITY[band];
