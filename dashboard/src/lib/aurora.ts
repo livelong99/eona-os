@@ -1,4 +1,4 @@
-import type { Transition } from "framer-motion";
+import type { Transition, Variants } from "framer-motion";
 
 // ---------------------------------------------------------------------------
 // Spring vocabulary — one shared set used across the whole dashboard.
@@ -29,6 +29,60 @@ export const SPRING_SLOW: Transition = {
   stiffness: 60,
   damping: 18,
   mass: 1.4,
+};
+
+// ---------------------------------------------------------------------------
+// Spatial / Cinematic OS vocabulary (Wave 2) — see dashboard/DESIGN-spatial.md.
+// CONTRACT (Phase 0): these NAMES are frozen so every worker imports the same
+// motion. Worker W1 (Foundation) owns the final tuned values.
+// ---------------------------------------------------------------------------
+
+/** 3D tilt + card lift — responsive, settles cleanly, no wobble (§3). */
+export const SPRING_TILT: Transition = {
+  type: "spring",
+  stiffness: 260,
+  damping: 24,
+  mass: 0.7,
+};
+
+/** Parallax follow — lightly damped, fast (pointer-tracking) (§2). */
+export const PARALLAX: Transition = {
+  type: "spring",
+  stiffness: 150,
+  damping: 26,
+  mass: 0.6,
+};
+
+/** View→view "camera dolly" (depth, not pan) (§5). */
+export const VIEW_SWOOP: Transition = {
+  type: "spring",
+  stiffness: 80,
+  damping: 19,
+  mass: 1.2,
+};
+
+/**
+ * Depth-aware container/child variants for staggered list/section entrance.
+ * Parent uses `LAYER_VARIANTS` as `variants` with initial="hidden"
+ * animate="visible"; children use `LAYER_ITEM`.
+ */
+export const LAYER_VARIANTS: Variants = {
+  hidden: {},
+  visible: {
+    transition: { staggerChildren: 0.04, delayChildren: 0.02 },
+  },
+};
+
+export const LAYER_ITEM: Variants = {
+  hidden: { opacity: 0, y: 12, z: -40 },
+  visible: { opacity: 1, y: 0, z: 0, transition: SPRING_GENTLE },
+};
+
+/** View-transition variants for the shell's AnimatePresence (§5). */
+export const VIEW_VARIANTS: Variants = {
+  initial: { opacity: 0, z: 60, scale: 1.02 },
+  enter: { opacity: 1, z: 0, scale: 1, transition: VIEW_SWOOP },
+  exit: { opacity: 0, z: -80, scale: 0.98, transition: VIEW_SWOOP },
 };
 
 // ---------------------------------------------------------------------------
@@ -82,6 +136,25 @@ export const AuroraTokens = {
   grainOpacity: "--grain-opacity",
   glowAccent: "--glow-accent",
   glowSpread: "--glow-spread",
+  // spatial (Wave 2)
+  perspective: "--perspective",
+  zField: "--z-field",
+  zBack: "--z-back",
+  zBase: "--z-base",
+  zRaise: "--z-raise",
+  zOver: "--z-over",
+  elev1: "--elev-1",
+  elev2: "--elev-2",
+  elev3: "--elev-3",
+  elev4: "--elev-4",
+  tiltMax: "--tilt-max",
+  tiltGlow: "--tilt-glow",
+  parallaxBudget: "--parallax-budget",
+  glassEdge: "--glass-edge",
+  radiusSm: "--radius-sm",
+  radiusMd: "--radius-md",
+  radiusLg: "--radius-lg",
+  radiusXl: "--radius-xl",
 } as const;
 
 export type AuroraTokenKey = keyof typeof AuroraTokens;

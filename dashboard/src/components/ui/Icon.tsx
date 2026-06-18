@@ -3,7 +3,9 @@ import {
   Kanban,
   LayoutGrid,
   Radio,
+  Rocket,
   Share2,
+  Shield,
   Sparkles,
   Target,
   type LucideIcon,
@@ -18,6 +20,8 @@ const MAP: Record<IconName, LucideIcon> = {
   share2: Share2,
   target: Target,
   bot: Bot,
+  rocket: Rocket,
+  shield: Shield,
 };
 
 interface IconProps {

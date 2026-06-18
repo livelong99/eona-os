@@ -11,6 +11,8 @@ import { ChatView } from "@/components/views/ChatView";
 import { MemoryView } from "@/components/views/MemoryView";
 import { PromptFoundryView } from "@/components/views/PromptFoundryView";
 import { GoalModeView } from "@/components/views/GoalModeView";
+import { LaunchpadView } from "@/components/views/LaunchpadView";
+import { TrustRailView } from "@/components/views/TrustRailView";
 
 export default function Home() {
   const [view, setView] = useState<ViewId>("mission-control");
@@ -55,6 +57,10 @@ function renderView(view: ViewId, onSelect: (id: ViewId) => void) {
       return <PromptFoundryView />;
     case "goal-mode":
       return <GoalModeView />;
+    case "launchpad":
+      return <LaunchpadView />;
+    case "trust-rail":
+      return <TrustRailView />;
     default:
       return null;
   }

@@ -26,6 +26,42 @@
   /* Glow */
   --glow-accent: rgba(124, 92, 255, 0.35);
   --glow-spread: 0 0 24px var(--glow-accent), 0 0 60px rgba(124, 92, 255, 0.12);
+
+  /* --- Spatial / Cinematic OS (Wave 2) — see dashboard/DESIGN-spatial.md ---
+     CONTRACT (Phase 0): these token NAMES are frozen so all workers reference
+     them. Worker W1 (Foundation) owns ongoing values. */
+
+  /* 3D perspective for the content stage */
+  --perspective: 1200px;
+
+  /* z-plane depth model (translateZ in px) — Field→Overlay (§1) */
+  --z-field: -120px;
+  --z-back: -60px;
+  --z-base: 0px;
+  --z-raise: 40px;
+  --z-over: 120px;
+
+  /* Elevation shadow scale (§6) — rises as a surface gains focus */
+  --elev-1: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --elev-2: 0 4px 12px rgba(0, 0, 0, 0.40);
+  --elev-3: 0 12px 32px rgba(0, 0, 0, 0.48), 0 0 0 1px rgba(124, 92, 255, 0.12);
+  --elev-4: 0 24px 64px rgba(0, 0, 0, 0.55), 0 0 40px rgba(124, 92, 255, 0.18);
+
+  /* Tilt interaction (§3) */
+  --tilt-max: 6deg;
+  --tilt-glow: rgba(124, 92, 255, 0.18);
+
+  /* Parallax px budget (§2) */
+  --parallax-budget: 24px;
+
+  /* Glass edge-light (top highlight) */
+  --glass-edge: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+
+  /* Radius scale (§6) */
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
 }
 
 @theme inline {

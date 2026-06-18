@@ -9,7 +9,9 @@ export type ViewId =
   | "agent:claude"
   | "prompt-foundry"
   | "memory"
-  | "goal-mode";
+  | "goal-mode"
+  | "launchpad"
+  | "trust-rail";
 
 export type IconName =
   | "grid"
@@ -18,7 +20,9 @@ export type IconName =
   | "sparkles"
   | "share2"
   | "target"
-  | "bot";
+  | "bot"
+  | "rocket"
+  | "shield";
 
 export interface NavItem {
   id: ViewId;
@@ -61,6 +65,13 @@ export const NAV: NavGroup[] = [
     heading: "Agents",
     items: [
       { id: "agent:claude", label: "Claude", icon: "bot", agentId: "claude" },
+    ],
+  },
+  {
+    heading: "Studio",
+    items: [
+      { id: "launchpad", label: "Launchpad", icon: "rocket" },
+      { id: "trust-rail", label: "Trust Rail", icon: "shield" },
     ],
   },
   {
