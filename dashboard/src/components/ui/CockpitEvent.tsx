@@ -1,5 +1,6 @@
 "use client";
 
+import { motion } from "framer-motion";
 import {
   Brain,
   CheckCircle2,
@@ -16,6 +17,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import type { CockpitRow } from "@/lib/cockpit";
+import { LAYER_ITEM } from "@/lib/aurora";
 
 interface CockpitEventProps {
   row: CockpitRow;
@@ -25,33 +27,35 @@ interface Visual {
   Icon: LucideIcon;
   /** tailwind text-color class for the gutter icon */
   tint: string;
+  /** tailwind border-color class for the left accent strip */
+  borderTint: string;
   label: string;
 }
 
 function visualFor(row: CockpitRow): Visual {
   switch (row.kind) {
     case "header":
-      return { Icon: Radio, tint: "text-aurora-teal", label: "Run started" };
+      return { Icon: Radio, tint: "text-aurora-teal", borderTint: "border-teal-500/40", label: "Run started" };
     case "reasoning":
-      return { Icon: Brain, tint: "text-violet-300", label: "Thinking" };
+      return { Icon: Brain, tint: "text-violet-300", borderTint: "border-violet-500/40", label: "Thinking" };
     case "message":
-      return { Icon: MessageSquare, tint: "text-foreground/70", label: "Claude" };
+      return { Icon: MessageSquare, tint: "text-foreground/70", borderTint: "border-foreground/20", label: "Claude" };
     case "tool":
-      return { Icon: Wrench, tint: "text-amber-300", label: row.tool ?? "Tool" };
+      return { Icon: Wrench, tint: "text-amber-300", borderTint: "border-amber-500/40", label: row.tool ?? "Tool" };
     case "diff":
-      return { Icon: FileDiff, tint: "text-emerald-300", label: "Edit" };
+      return { Icon: FileDiff, tint: "text-emerald-300", borderTint: "border-emerald-500/40", label: "Edit" };
     case "terminal":
-      return { Icon: TerminalIcon, tint: "text-sky-300", label: "Terminal" };
+      return { Icon: TerminalIcon, tint: "text-sky-300", borderTint: "border-sky-500/40", label: "Terminal" };
     case "subagent":
-      return { Icon: Users, tint: "text-fuchsia-300", label: "Sub-agent" };
+      return { Icon: Users, tint: "text-fuchsia-300", borderTint: "border-fuchsia-500/40", label: "Sub-agent" };
     case "approval":
-      return { Icon: ShieldAlert, tint: "text-orange-300", label: "Approval" };
+      return { Icon: ShieldAlert, tint: "text-orange-300", borderTint: "border-orange-500/40", label: "Approval" };
     case "lifecycle":
       return row.event === "run.completed"
-        ? { Icon: CheckCircle2, tint: "text-emerald-400", label: "Completed" }
-        : { Icon: XCircle, tint: "text-rose-400", label: "Ended" };
+        ? { Icon: CheckCircle2, tint: "text-emerald-400", borderTint: "border-emerald-500/50", label: "Completed" }
+        : { Icon: XCircle, tint: "text-rose-400", borderTint: "border-rose-500/50", label: "Ended" };
     default:
-      return { Icon: CircleDot, tint: "text-muted", label: row.event ?? "Event" };
+      return { Icon: CircleDot, tint: "text-muted", borderTint: "border-border", label: row.event ?? "Event" };
   }
 }
 
@@ -69,10 +73,27 @@ function StatusDot({ status }: { status?: string }) {
 }
 
 export function CockpitEvent({ row }: CockpitEventProps) {
-  const { Icon, tint, label } = visualFor(row);
+  const { Icon, tint, borderTint, label } = visualFor(row);
 
   return (
-    <li className="flex gap-3">
+    // motion.li participates in the parent LAYER_VARIANTS stagger.
+    <motion.li
+      variants={LAYER_ITEM}
+      style={{
+        background: "var(--glass-bg)",
+        backdropFilter: "blur(var(--glass-blur))",
+        WebkitBackdropFilter: "blur(var(--glass-blur))",
+        borderRadius: "var(--radius-md)",
+        boxShadow: "var(--elev-1), var(--glass-edge)",
+      }}
+      className={[
+        "flex gap-3 border border-[var(--glass-border)] px-3 py-2.5",
+        // Left accent strip by event kind — 2px colored left border.
+        `border-l-2 ${borderTint}`,
+        "transition-[border-color,box-shadow] duration-200",
+        "hover:shadow-[var(--elev-2),var(--glass-edge)]",
+      ].join(" ")}
+    >
       <div className="flex flex-col items-center pt-0.5">
         <Icon className={`h-4 w-4 shrink-0 ${tint}`} aria-hidden />
       </div>
@@ -92,7 +113,7 @@ export function CockpitEvent({ row }: CockpitEventProps) {
 
         <RowBody row={row} />
       </div>
-    </li>
+    </motion.li>
   );
 }
 
@@ -136,7 +157,7 @@ function RowBody({ row }: { row: CockpitRow }) {
                         : "text-muted"
                   }
                 >
-                  {line || " "}
+                  {line || " "}
                 </div>
               ))}
             </pre>

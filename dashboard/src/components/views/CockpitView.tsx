@@ -8,6 +8,14 @@ import { startRun, streamRunEventsTyped } from "@/lib/hermes";
 import { reduceRows, TERMINAL_EVENTS, type CockpitRow } from "@/lib/cockpit";
 import { SPRING_GENTLE, TRANSITION_STANDARD } from "@/lib/aurora";
 import { CockpitEvent } from "@/components/ui/CockpitEvent";
+import { SpatialStage } from "@/components/ui/SpatialStage";
+import { GlassCard } from "@/components/ui/GlassCard";
+import { Toolbar } from "@/components/ui/Toolbar";
+import { EmptyState } from "@/components/ui/EmptyState";
+
+// ---------------------------------------------------------------------------
+// Run state machine — unchanged from pre-spatial version.
+// ---------------------------------------------------------------------------
 
 type RunState = "idle" | "running" | "completed" | "failed" | "cancelled";
 
@@ -28,6 +36,7 @@ const STATE_TINT: Record<RunState, string> = {
 };
 
 export function CockpitView() {
+  // ── Run state (all wiring preserved verbatim) ──────────────────────────────
   const [draft, setDraft] = useState("");
   const [rows, setRows] = useState<CockpitRow[]>([]);
   const [state, setState] = useState<RunState>("idle");
@@ -94,59 +103,66 @@ export function CockpitView() {
     setState("cancelled");
   }
 
+  // ── Spatial presentation ───────────────────────────────────────────────────
+
+  /** State badge rendered in the Toolbar's actions slot. */
+  const stateBadge = (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${STATE_TINT[state]}`}
+    >
+      {state === "running" && (
+        <span className="live-dot h-1.5 w-1.5 rounded-full bg-amber-400" />
+      )}
+      {STATE_LABEL[state]}
+    </span>
+  );
+
   return (
     <div className="relative flex h-full flex-col">
-      <header className="relative z-10 flex items-center justify-between border-b border-border px-6 py-4">
-        <div className="flex items-center gap-3">
-          <Radio className="h-5 w-5 text-aurora-teal" aria-hidden />
-          <div>
-            <h2 className="text-lg font-semibold">Cockpit</h2>
-            <p className="text-xs text-muted">
-              Watch Claude plan and execute — live tool calls, edits, and sub-agents.
-            </p>
-          </div>
-        </div>
-        <span
-          className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-medium ${STATE_TINT[state]}`}
-        >
-          {state === "running" && (
-            <span className="live-dot h-1.5 w-1.5 rounded-full bg-amber-400" />
+      <Toolbar
+        icon={<Radio className="h-4 w-4 text-aurora-teal" />}
+        title="Cockpit"
+        subtitle="Watch Claude plan and execute — live tool calls, edits, and sub-agents."
+        actions={stateBadge}
+      />
+
+      {/* SpatialStage wraps the scrollable event stream for depth context */}
+      <SpatialStage className="relative z-10 flex-1 overflow-hidden">
+        <div ref={scrollRef} className="h-full overflow-y-auto px-6 py-5">
+          {rows.length === 0 ? (
+            <EmptyState
+              icon={<Radio />}
+              title="Give Claude a task to run."
+              hint="The run streams here as a live timeline — reasoning, tool calls, file diffs, terminal output, and any sub-agents it spawns."
+              className="mx-auto mt-20 max-w-md"
+            />
+          ) : (
+            <motion.ul layout className="mx-auto flex max-w-3xl flex-col gap-3">
+              <AnimatePresence initial={false}>
+                {rows.map((row) => (
+                  <motion.div
+                    key={row.id}
+                    layout
+                    initial={{ opacity: 0, y: 6, z: -20 }}
+                    animate={{ opacity: 1, y: 0, z: 0 }}
+                    transition={
+                      row.kind === "message" || row.kind === "reasoning"
+                        ? TRANSITION_STANDARD
+                        : SPRING_GENTLE
+                    }
+                  >
+                    <CockpitEvent row={row} />
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </motion.ul>
           )}
-          {STATE_LABEL[state]}
-        </span>
-      </header>
+        </div>
+      </SpatialStage>
 
-      <div ref={scrollRef} className="relative z-10 flex-1 overflow-y-auto px-6 py-5">
-        {rows.length === 0 ? (
-          <div className="mx-auto mt-20 max-w-md text-center text-sm text-muted">
-            <p className="mb-1 text-foreground/80">Give Claude a task to run.</p>
-            <p>
-              The run streams here as a live timeline — reasoning, tool calls, file
-              diffs, terminal output, and any sub-agents it spawns.
-            </p>
-          </div>
-        ) : (
-          <motion.ul layout className="mx-auto flex max-w-3xl flex-col gap-3">
-            <AnimatePresence initial={false}>
-              {rows.map((row) => (
-                <motion.div
-                  key={row.id}
-                  layout
-                  initial={{ opacity: 0, y: 6 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={row.kind === "message" || row.kind === "reasoning"
-                    ? TRANSITION_STANDARD
-                    : SPRING_GENTLE}
-                >
-                  <CockpitEvent row={row} />
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </motion.ul>
-        )}
-      </div>
-
-      <div className="relative z-10 border-t border-border px-6 py-4">
+      {/* Input bar — glass panel; [border-radius:0] overrides the xl default so it
+          sits flush at the bottom edge of the viewport. */}
+      <GlassCard as="aside" elevation={2} className="relative z-10 mx-0 [border-radius:0] px-6 py-4">
         <div className="mx-auto flex max-w-3xl items-end gap-2">
           <textarea
             value={draft}
@@ -183,7 +199,7 @@ export function CockpitView() {
             </button>
           )}
         </div>
-      </div>
+      </GlassCard>
     </div>
   );
 }
