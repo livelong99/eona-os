@@ -28,6 +28,8 @@ export interface NavItem {
   id: ViewId;
   label: string;
   icon: IconName;
+  /** Short description shown as a hint in the Command Bridge palette. */
+  hint?: string;
   /** agent id, when this item is an agent chat */
   agentId?: string;
 }
@@ -56,30 +58,30 @@ export const NAV: NavGroup[] = [
   {
     heading: "Workspace",
     items: [
-      { id: "mission-control", label: "Mission Control", icon: "grid" },
-      { id: "cockpit", label: "Cockpit", icon: "cockpit" },
-      { id: "kanban", label: "Kanban", icon: "kanban" },
+      { id: "mission-control", label: "Mission Control", icon: "grid", hint: "Agent constellation overview" },
+      { id: "cockpit", label: "Cockpit", icon: "cockpit", hint: "Live run event timeline" },
+      { id: "kanban", label: "Kanban", icon: "kanban", hint: "Task board" },
     ],
   },
   {
     heading: "Agents",
     items: [
-      { id: "agent:claude", label: "Claude", icon: "bot", agentId: "claude" },
+      { id: "agent:claude", label: "Claude", icon: "bot", agentId: "claude", hint: "Chat with Claude Code CLI" },
     ],
   },
   {
     heading: "Studio",
     items: [
-      { id: "launchpad", label: "Launchpad", icon: "rocket" },
-      { id: "trust-rail", label: "Trust Rail", icon: "shield" },
+      { id: "launchpad", label: "Launchpad", icon: "rocket", hint: "Browse and launch agent tools" },
+      { id: "trust-rail", label: "Trust Rail", icon: "shield", hint: "Review and approve agent actions" },
     ],
   },
   {
     heading: "Self",
     items: [
-      { id: "prompt-foundry", label: "Prompt Foundry", icon: "sparkles" },
-      { id: "memory", label: "Memory", icon: "share2" },
-      { id: "goal-mode", label: "Goal Mode", icon: "target" },
+      { id: "prompt-foundry", label: "Prompt Foundry", icon: "sparkles", hint: "Craft and store prompts" },
+      { id: "memory", label: "Memory", icon: "share2", hint: "Knowledge graph explorer" },
+      { id: "goal-mode", label: "Goal Mode", icon: "target", hint: "Set and track objectives" },
     ],
   },
 ];

@@ -1,9 +1,12 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { AGENTS, type ViewId } from "@/lib/nav";
 import { getHealth } from "@/lib/hermes";
+import { VIEW_VARIANTS } from "@/lib/aurora";
 import { Sidebar } from "@/components/Sidebar";
+import { CommandBridge } from "@/components/CommandBridge";
 import { MissionControl } from "@/components/views/MissionControl";
 import { CockpitView } from "@/components/views/CockpitView";
 import { KanbanView } from "@/components/views/KanbanView";
@@ -18,6 +21,7 @@ export default function Home() {
   const [view, setView] = useState<ViewId>("mission-control");
   const [live, setLive] = useState(false);
 
+  // Health poll — preserved verbatim.
   useEffect(() => {
     let active = true;
     const check = () =>
@@ -33,7 +37,34 @@ export default function Home() {
   return (
     <div className="flex h-screen overflow-hidden">
       <Sidebar active={view} onSelect={setView} live={live} />
-      <main className="min-w-0 flex-1 bg-background">{renderView(view, setView)}</main>
+
+      {/* Main content — perspective context for camera dolly transitions (§5). */}
+      <main
+        className="relative min-w-0 flex-1 overflow-hidden"
+        style={{ perspective: "var(--perspective)", transformStyle: "preserve-3d" }}
+      >
+        {/* AnimatePresence keyed by ViewId drives the view→view camera dolly.
+            mode="wait" ensures the outgoing view fully exits before the
+            incoming one enters, preventing z-fighting during overlap. */}
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={view}
+            variants={VIEW_VARIANTS}
+            initial="initial"
+            animate="enter"
+            exit="exit"
+            className="absolute inset-0"
+            // Reduced-motion: VIEW_VARIANTS already carry opacity-only fallback
+            // via the root MotionConfig reducedMotion="user" in layout.tsx.
+          >
+            {renderView(view, setView)}
+          </motion.div>
+        </AnimatePresence>
+      </main>
+
+      {/* CommandBridge — Overlay-plane omnibox; mounted outside main so it
+          sits above the perspective context and is never clipped by overflow. */}
+      <CommandBridge setView={setView} />
     </div>
   );
 }
