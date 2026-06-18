@@ -32,10 +32,13 @@ services:
       - CRAWL4AI_URL=http://crawl4ai:11235
       - QDRANT_URL=http://qdrant:6333
       - CLAUDE_BRIDGE_URL=http://host.docker.internal:8765 # host-side Claude Code bridge
+      - HERMES_TOOL_ROOTS=/opt/skills # where tool.yaml manifests are discovered (Launchpad)
     volumes:
       # Official data dir: holds config.yaml, .env, sessions, memory, skills.
       # scripts/install.sh seeds ~/.hermes from hermes/ (config, .env, skills, profiles).
       - "${HOME}/.hermes:/opt/data"
+      # Skill manifests (tool.yaml) for the Agent-Tools Launchpad — read-only.
+      - "./.claude/skills:/opt/skills:ro"
     ports:
       - "127.0.0.1:8642:8642" # OpenAI-compatible API + /health
     extra_hosts:

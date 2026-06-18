@@ -9,6 +9,7 @@ reference tool.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -21,10 +22,23 @@ log = logging.getLogger(__name__)
 
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schemas" / "tool_manifest.schema.json"
 
-# Default skill roots searched by discover_manifests when none are supplied.
-_DEFAULT_ROOTS: List[Path] = [
-    Path(__file__).resolve().parent.parent.parent / ".claude" / "skills",
-]
+
+def _resolve_default_roots() -> List[Path]:
+    """Skill roots searched when ``discover_manifests`` is called without roots.
+
+    ``HERMES_TOOL_ROOTS`` (os.pathsep-separated) overrides the default — needed
+    in container deployments where the repo's ``.claude/skills`` is mounted at a
+    fixed path rather than sitting beside the engine source.
+    """
+    env = os.environ.get("HERMES_TOOL_ROOTS", "").strip()
+    if env:
+        return [Path(p).expanduser() for p in env.split(os.pathsep) if p.strip()]
+    return [Path(__file__).resolve().parent.parent.parent / ".claude" / "skills"]
+
+
+# Resolved at import for back-compat; discover_manifests re-resolves so a runtime
+# env (set after import) is still honoured.
+_DEFAULT_ROOTS: List[Path] = _resolve_default_roots()
 
 
 @dataclass(frozen=True)
@@ -208,7 +222,7 @@ def discover_manifests(roots: Optional[List[Path]] = None) -> List[ToolManifest]
     and skipped so one bad manifest never blocks the rest.  Returns a list of
     all successfully loaded ``ToolManifest`` objects.
     """
-    search_roots = roots if roots is not None else _DEFAULT_ROOTS
+    search_roots = roots if roots is not None else _resolve_default_roots()
     manifests: List[ToolManifest] = []
 
     for root in search_roots:
