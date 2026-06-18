@@ -285,6 +285,40 @@ export async function getMemory(): Promise<{ graph: MemoryGraph; live: boolean }
   return { graph: MOCK_MEMORY, live: false };
 }
 
+// --- Approvals (Trust Rail) --------------------------------------------------
+// Pending approvals aggregated across active runs (GET /v1/approvals). Resolve
+// via the existing per-run endpoint POST /v1/runs/{runId}/approval.
+
+export interface HermesApproval {
+  id: string;
+  runId: string;
+  text: string;
+  choices: string[];
+  ts: number;
+}
+
+export async function getApprovals(): Promise<{
+  approvals: HermesApproval[];
+  live: boolean;
+}> {
+  const data = await tryFetch<{ approvals: HermesApproval[] }>("/v1/approvals");
+  if (data?.approvals) return { approvals: data.approvals, live: true };
+  return { approvals: [], live: false };
+}
+
+/** Resolve a pending approval. `choice` is one of once|session|always|deny. */
+export async function respondApproval(
+  runId: string,
+  choice: string,
+): Promise<boolean> {
+  const res = await tryFetch<unknown>(`/v1/runs/${runId}/approval`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ choice }),
+  });
+  return res !== null;
+}
+
 /**
  * Subscribe to the global Kanban event stream (GET /v1/events, SSE).
  * Falls back to the mock ticker when the engine is unreachable so the

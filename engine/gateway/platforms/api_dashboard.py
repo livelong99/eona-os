@@ -123,6 +123,39 @@ def _vault_labels(cap: int = 40) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
+# Helpers: tool manifests (Launchpad) + approvals (Trust Rail)
+# ---------------------------------------------------------------------------
+
+# Fixed approval choice set — mirrors api_server's _approval_notify and the
+# per-run POST /v1/runs/{run_id}/approval handler.
+_APPROVAL_CHOICES = ["once", "session", "always", "deny"]
+
+
+def _manifest_to_dict(m: Any) -> dict:
+    """Map a tools.tool_manifest.ToolManifest to the dashboard ToolManifest shape
+    (dashboard/src/lib/tools.ts). ``tool`` → ``id``; steps/inputs passed through.
+    """
+    return {
+        "id": m.tool,
+        "title": m.title,
+        "skill": m.skill,
+        "steps": [
+            {
+                "id": s.id,
+                "title": s.title,
+                "ref": s.ref,
+                "hitl": s.hitl,
+                "artifacts": list(s.artifacts or []),
+                "ui": s.ui,
+            }
+            for s in (m.steps or [])
+        ],
+        **({"description": m.description} if m.description else {}),
+        "inputs": list(m.inputs or []),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Route registration
 # ---------------------------------------------------------------------------
 
@@ -237,7 +270,65 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
         finally:
             return resp  # noqa: B012 — aiohttp requires returning the prepared response
 
+    # ------------------------------------------------------------------
+    # GET /v1/tools — agent-tool manifests → ToolManifest[] (Launchpad)
+    # ------------------------------------------------------------------
+    async def _tools(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            from tools.tool_manifest import discover_manifests
+            manifests = discover_manifests()
+            tools = [_manifest_to_dict(m) for m in manifests]
+            return web.json_response({"tools": tools})
+        except Exception as exc:
+            logger.exception("/v1/tools failed")
+            return web.json_response({"tools": [], "error": str(exc)})
+
+    # ------------------------------------------------------------------
+    # GET /v1/approvals — pending approvals across active runs (Trust Rail)
+    # Aggregates the per-run approval queues (tools.approval) keyed by the
+    # run→session map the api_server maintains. Resolve via the existing
+    # POST /v1/runs/{run_id}/approval endpoint.
+    # ------------------------------------------------------------------
+    async def _approvals(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            from tools.approval import pending_for_session
+        except Exception:
+            return web.json_response({"approvals": []})
+
+        sessions = dict(getattr(adapter, "_run_approval_sessions", {}) or {})
+        now_ms = int(time.time() * 1000)
+        out: list[dict] = []
+        for run_id, session_key in sessions.items():
+            try:
+                pend = pending_for_session(session_key)
+            except Exception:
+                logger.debug("pending_for_session failed for %s", run_id, exc_info=True)
+                continue
+            for i, data in enumerate(pend):
+                text = (
+                    data.get("description")
+                    or data.get("command")
+                    or "Approval requested"
+                )
+                out.append({
+                    "id": f"{run_id}:{i}",
+                    "runId": run_id,
+                    "text": text,
+                    "choices": list(data.get("choices") or _APPROVAL_CHOICES),
+                    "ts": now_ms,
+                })
+        return web.json_response({"approvals": out})
+
     app.router.add_get("/v1/tasks", _tasks)
     app.router.add_get("/v1/memory", _memory)
     app.router.add_get("/v1/events", _events)
-    logger.debug("dashboard data routes registered (/v1/tasks, /v1/memory, /v1/events)")
+    app.router.add_get("/v1/tools", _tools)
+    app.router.add_get("/v1/approvals", _approvals)
+    logger.debug(
+        "dashboard data routes registered "
+        "(/v1/tasks, /v1/memory, /v1/events, /v1/tools, /v1/approvals)"
+    )

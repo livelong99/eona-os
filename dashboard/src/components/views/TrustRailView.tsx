@@ -1,29 +1,17 @@
 "use client";
 
-// Trust Rail — W5 implementation.
-// Full-page approval surface. Renders pending and resolved approval events
-// arriving from the global subscribeEvents() SSE stream.
-//
-// BACKEND FLAG #2: Trust Rail needs one of:
-//   (a) GET /v1/events extended to emit RunEvent-shaped approval events with
-//       choices[] (currently TaskEvent has kind + message but no choices[]).
-//   (b) GET /v1/approvals returning pending ApprovalItem[].
-//   Until then, choices[] defaults to ["Approve","Deny"] for events whose
-//   kind matches an approval pattern. The surface degrades gracefully with
-//   an empty state when no approvals have arrived this session.
-//
-// BACKEND FLAG #3: Approve/Deny buttons update local state only. A real
-//   implementation needs POST /v1/approvals/{id}/respond to relay the
-//   decision to the running agent.
+// Trust Rail — approval surface. Polls GET /v1/approvals for pending approvals
+// aggregated across active runs (real choices: once|session|always|deny) and
+// resolves each via POST /v1/runs/{runId}/approval, relaying the decision to the
+// waiting agent. Empty state when nothing is pending.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { ShieldAlert, ShieldCheck } from "lucide-react";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { SPRING_GENTLE } from "@/lib/aurora";
-import { subscribeEvents } from "@/lib/hermes";
-import type { TaskEvent } from "@/lib/types";
+import { getApprovals, respondApproval } from "@/lib/hermes";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,33 +41,13 @@ function relTime(ts: number): string {
   return `${Math.floor(mins / 60)}h ago`;
 }
 
-/** Parse a TaskEvent into an ApprovalItem when it looks like an approval. */
-function toApprovalItem(ev: TaskEvent): ApprovalItem | null {
-  const kind = ev.kind.toLowerCase();
-  if (!kind.includes("approval") && kind !== "hitl") return null;
-  return {
-    id: ev.id,
-    runId: ev.taskId,
-    text: ev.message,
-    // TaskEvent.message is free-form; choices[] not recoverable from it until
-    // BACKEND FLAG #2 is resolved. Default to Approve/Deny as best effort.
-    choices: ["Approve", "Deny"],
-    ts: ev.ts,
-  };
-}
-
-/** Is this a "responded" event (approval already answered)? */
-function isResponded(ev: TaskEvent): boolean {
-  return ev.kind.toLowerCase().includes("responded");
-}
-
 // ---------------------------------------------------------------------------
 // Approval card — pending
 // ---------------------------------------------------------------------------
 
 interface ApprovalCardProps {
   item: ApprovalItem;
-  onRespond: (id: string, choice: string) => void;
+  onRespond: (item: ApprovalItem, choice: string) => void;
 }
 
 function PendingCard({ item, onRespond }: ApprovalCardProps) {
@@ -154,7 +122,7 @@ function PendingCard({ item, onRespond }: ApprovalCardProps) {
           {item.choices.map((choice, i) => (
             <button
               key={choice}
-              onClick={() => onRespond(item.id, choice)}
+              onClick={() => onRespond(item, choice)}
               className={choiceStyle(i, item.choices.length)}
             >
               {choice}
@@ -201,50 +169,38 @@ function ResolvedCard({ item }: { item: ApprovalItem }) {
 // ---------------------------------------------------------------------------
 
 const MAX_RESOLVED = 20;
+const POLL_MS = 3000;
 
 function useApprovals() {
   const [pending, setPending] = useState<ApprovalItem[]>([]);
   const [resolved, setResolved] = useState<ApprovalItem[]>([]);
+  // ids we've responded to locally — filtered out of incoming polls until the
+  // backend clears them, so an optimistically-resolved card doesn't flicker back.
+  const respondedIds = useRef<Set<string>>(new Set());
 
   useEffect(() => {
-    const unsub = subscribeEvents((ev: TaskEvent) => {
-      if (isResponded(ev)) {
-        // Mark matching pending item as responded.
-        setPending((prev) => {
-          const idx = prev.findIndex(
-            (p) => p.id === ev.id || p.runId === ev.taskId,
-          );
-          if (idx === -1) return prev;
-          const item = { ...prev[idx], respondedChoice: ev.message, ts: ev.ts };
-          setResolved((r) =>
-            [item, ...r].slice(0, MAX_RESOLVED),
-          );
-          return prev.filter((_, i) => i !== idx);
-        });
-        return;
-      }
-      const item = toApprovalItem(ev);
-      if (!item) return;
-      setPending((prev) => {
-        // Deduplicate by id.
-        if (prev.some((p) => p.id === item.id)) return prev;
-        return [item, ...prev];
-      });
-    });
-    return unsub;
+    let active = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    async function poll() {
+      const { approvals } = await getApprovals();
+      if (!active) return;
+      setPending(approvals.filter((a) => !respondedIds.current.has(a.id)));
+      timer = setTimeout(poll, POLL_MS);
+    }
+    void poll();
+    return () => {
+      active = false;
+      if (timer) clearTimeout(timer);
+    };
   }, []);
 
-  const respond = useCallback((id: string, choice: string) => {
-    // TODO(engine): POST /v1/approvals/{id}/respond to relay the choice
-    // to the running agent. Currently updates local state only.
-    setPending((prev) => {
-      const item = prev.find((p) => p.id === id);
-      if (!item) return prev;
-      setResolved((r) =>
-        [{ ...item, respondedChoice: choice }, ...r].slice(0, MAX_RESOLVED),
-      );
-      return prev.filter((p) => p.id !== id);
-    });
+  const respond = useCallback(async (item: ApprovalItem, choice: string) => {
+    respondedIds.current.add(item.id);
+    setPending((prev) => prev.filter((p) => p.id !== item.id));
+    setResolved((r) =>
+      [{ ...item, respondedChoice: choice }, ...r].slice(0, MAX_RESOLVED),
+    );
+    await respondApproval(item.runId, choice);
   }, []);
 
   return { pending, resolved, respond };

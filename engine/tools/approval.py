@@ -753,6 +753,21 @@ def resolve_gateway_approval(session_key: str, choice: str,
     return len(targets)
 
 
+def pending_for_session(session_key: str) -> list[dict]:
+    """Return data dicts for the approvals currently queued for *session_key*.
+
+    Read-only FIFO snapshot (oldest first, matching resolve order) for surfaces
+    that enumerate what is awaiting a decision — e.g. the dashboard Trust Rail's
+    ``GET /v1/approvals`` aggregation. Each dict is the approval data (command,
+    description, pattern_keys, …) as handed to the gateway notify callback.
+    """
+    with _lock:
+        queue = _gateway_queues.get(session_key)
+        if not queue:
+            return []
+        return [dict(entry.data or {}) for entry in queue]
+
+
 def has_blocking_approval(session_key: str) -> bool:
     """Check if a session has one or more blocking gateway approvals waiting."""
     with _lock:
