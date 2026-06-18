@@ -1,13 +1,15 @@
 /**
  * AuroraField — fixed full-viewport background layer.
  *
- * Renders three blurred radial-gradient orbs that drift slowly using the
- * CSS `aurora-drift` keyframe defined in globals.css.  Each orb has a
- * different animation duration + delay so they never sync.
- *
- * prefers-reduced-motion: globals.css sets `.aurora-orb { animation: none }`
- * so the orbs remain as static soft glows — the background still looks
- * intentional rather than blank.
+ * Wave 2 updates:
+ * - The outer wrapper now carries `translateZ(var(--z-field))` so it truly sits
+ *   on the Field depth plane (−120px) when a SpatialStage is in the ancestor
+ *   chain with `perspective` set.
+ * - `transform-style: preserve-3d` propagates depth to children correctly.
+ * - Orbs retain their CSS `aurora-drift` animation (cheaper than framer-motion
+ *   for an infinite background loop).
+ * - prefers-reduced-motion: globals.css `.aurora-orb { animation: none }` leaves
+ *   orbs as static soft glows — intentional, not blank.
  *
  * No framer-motion dependency — CSS animation is cheaper for a background
  * layer that runs indefinitely.
@@ -17,6 +19,11 @@ export function AuroraField() {
     <div
       aria-hidden="true"
       className="fixed inset-0 z-0 pointer-events-none overflow-hidden"
+      style={{
+        // Sit on the Field plane when inside a SpatialStage perspective context.
+        transform: "translateZ(var(--z-field))",
+        transformStyle: "preserve-3d",
+      }}
     >
       {/* Orb 1 — violet, top-left anchor */}
       <div

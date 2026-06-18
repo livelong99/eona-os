@@ -40,18 +40,21 @@ export const SPRING_SLOW: Transition = {
 /** 3D tilt + card lift — responsive, settles cleanly, no wobble (§3). */
 export const SPRING_TILT: Transition = {
   type: "spring",
-  stiffness: 260,
-  damping: 24,
+  stiffness: 280,
+  damping: 26,
   mass: 0.7,
 };
 
 /** Parallax follow — lightly damped, fast (pointer-tracking) (§2). */
 export const PARALLAX: Transition = {
   type: "spring",
-  stiffness: 150,
-  damping: 26,
+  stiffness: 180,
+  damping: 28,
   mass: 0.6,
 };
+
+/** Opacity for the specular cursor glint overlay on TiltCard. */
+export const TILT_GLINT_OPACITY = 0.18;
 
 /** View→view "camera dolly" (depth, not pan) (§5). */
 export const VIEW_SWOOP: Transition = {
