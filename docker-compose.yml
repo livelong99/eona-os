@@ -43,7 +43,22 @@ services:
       - "127.0.0.1:8642:8642" # OpenAI-compatible API + /health
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    depends_on: [searxng, crawl4ai, qdrant]
+    healthcheck:
+      # /health is unauthenticated; curl is installed in the engine image.
+      # start-period matches the Dockerfile HEALTHCHECK to allow s6 init +
+      # lazy-dep install + API server bind before the first probe fires.
+      test: ["CMD", "curl", "-sf", "http://localhost:8642/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+    depends_on:
+      searxng:
+        condition: service_healthy
+      crawl4ai:
+        condition: service_healthy
+      qdrant:
+        condition: service_healthy
 
   searxng: # self-hosted web search (replaces Firecrawl/Tavily)
     image: searxng/searxng:latest # verify/pin
@@ -55,6 +70,15 @@ services:
       - ./infra/searxng:/etc/searxng:rw
     ports:
       - "127.0.0.1:8080:8080"
+    healthcheck:
+      # searxng exposes /healthz (confirmed in webapp.py). Uses wget — no curl
+      # in the searxng image. -q silences output; -O- discards body; --spider
+      # avoids reading the body for a faster check.
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
 
   crawl4ai: # self-hosted scrape/extract (page -> markdown)
     image: unclecode/crawl4ai:latest # verify/pin
@@ -63,6 +87,14 @@ services:
     shm_size: "1g"
     ports:
       - "127.0.0.1:11235:11235"
+    healthcheck:
+      # crawl4ai's own image healthcheck uses curl /health — we mirror it here
+      # so compose depends_on can gate on service_healthy.
+      test: ["CMD", "curl", "-sf", "http://localhost:11235/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
 
   qdrant: # vector memory over the vault (semantic recall)
     image: qdrant/qdrant:latest # verify/pin
@@ -74,6 +106,14 @@ services:
       # Host publish on 6533 to avoid clashing with other local Qdrant instances
       # (e.g. jarvis on 6333). In-network service is still qdrant:6333.
       - "127.0.0.1:6533:6333"
+    healthcheck:
+      # qdrant ships no curl/wget; use nc (netcat) TCP port check instead.
+      # Port 6333 = REST API; a successful TCP connect means qdrant is up.
+      test: ["CMD-SHELL", "nc -z localhost 6333 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
 
   dashboard: # Next.js mission control
     build: ./dashboard
@@ -89,7 +129,17 @@ services:
       - HERMES_URL=http://hermes:8642
     ports:
       - "127.0.0.1:3737:3737"
-    depends_on: [hermes]
+    healthcheck:
+      # node:22-alpine has wget but not curl; probe the root path which Next.js
+      # always returns 200 for when the server is ready.
+      test: ["CMD", "wget", "-qO-", "http://localhost:3737/"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
+      retries: 3
+    depends_on:
+      hermes:
+        condition: service_healthy
 
 volumes:
   qdrant_data:

@@ -345,6 +345,12 @@ COPY --chmod=0755 docker/hermes-exec-shim.sh /opt/hermes/bin/hermes
 # binary by absolute path, so this PATH ordering is transparent to
 # every other consumer.
 ENV PATH="/opt/hermes/bin:/opt/hermes/.venv/bin:/opt/data/.local/bin:${PATH}"
+
+# Healthcheck: poll /health (unauthenticated, registered in api_server connect()).
+# start-period gives the s6 init + lazy-dep install + API server bind time.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -sf http://127.0.0.1:8642/health || exit 1
+
 RUN mkdir -p /opt/data
 VOLUME [ "/opt/data" ]
 

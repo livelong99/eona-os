@@ -4408,7 +4408,25 @@ class APIServerAdapter(BasePlatformAdapter):
                     "including loopback-only binds on %s.",
                     self.name, self._host,
                 )
+                import sys as _sys
+                print(
+                    f"  Error: API_SERVER_KEY is not set. The API server will not start.\n"
+                    f"  Set API_SERVER_KEY in ~/.hermes/.env before starting Hermes.\n"
+                    f"  Generate one with: openssl rand -hex 32",
+                    file=_sys.stderr,
+                )
                 return False
+
+            # Warn (don't crash) if the claude_code runtime token is absent.
+            # Without it the `claude` CLI shelled out by the claude_code runtime
+            # will fail on every agent turn, but other runtimes may work fine.
+            if not os.getenv("CLAUDE_CODE_OAUTH_TOKEN"):
+                logger.warning(
+                    "[%s] CLAUDE_CODE_OAUTH_TOKEN is not set. "
+                    "The claude_code runtime will fail to authenticate. "
+                    "Set it in ~/.hermes/.env if you are using the Claude Code engine.",
+                    self.name,
+                )
 
             # Refuse to start network-accessible with a placeholder key.
             # Ported from openclaw/openclaw#64586.
