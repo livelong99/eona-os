@@ -437,6 +437,16 @@ class ClaudeCodeSession:
         )
         self.session_id: Optional[str] = None
         self._mcp_config_path: Optional[str] = None
+        # When set (per-request), forwarded to the CLI as --append-system-prompt.
+        # This is the ONLY hook that reliably imposes a caller persona/style
+        # (e.g. the dashboard's voice "Jarvis" prompt); a request system message
+        # alone is overridden by Claude Code's own identity.
+        self.append_system_prompt: Optional[str] = None
+        # When set (per-request), forwarded to the CLI as --model. The claude_code
+        # path otherwise never passes --model, so None here = unchanged behaviour
+        # (the CLI uses its default model). The Labs tool builder/refine endpoints
+        # set this to "claude-opus-4-8" for authoring accuracy.
+        self.model_override: Optional[str] = None
         self.claude_bin = os.environ.get("CLAUDE_BIN", "claude")
         # Allow the hermes-tools MCP server; Claude brings its own native tools.
         self.allowed_tools = os.environ.get(
@@ -478,6 +488,10 @@ class ClaudeCodeSession:
             "--allowedTools", self.allowed_tools,
             "--permission-mode", self.permission_mode,
         ]
+        if self.append_system_prompt:
+            cmd += ["--append-system-prompt", self.append_system_prompt]
+        if self.model_override:
+            cmd += ["--model", self.model_override]
         if self.session_id:
             cmd += ["--resume", self.session_id]
         return cmd
@@ -652,6 +666,20 @@ def run_claude_code_turn(
     if getattr(agent, "_claude_session", None) is None:
         cwd = getattr(agent, "session_cwd", None) or os.getcwd()
         agent._claude_session = ClaudeCodeSession(cwd=cwd)
+
+    # Per-request persona/style → CLI --append-system-prompt. Set by the API
+    # server from the request's system message (the dashboard voice path uses it
+    # for the "Jarvis" prompt). None for normal agent turns → no behaviour change.
+    agent._claude_session.append_system_prompt = getattr(
+        agent, "_append_system_prompt", None
+    )
+
+    # Per-request model override → CLI --model. Set by the API server for the
+    # Labs tool builder/refine endpoints (Opus 4.8 for authoring accuracy).
+    # None for normal agent turns → no behaviour change.
+    agent._claude_session.model_override = getattr(
+        agent, "_model_override", None
+    )
 
     # The user message is already appended to `messages` by run_conversation().
     # Pass both stream callbacks so deltas and rich RunEvents flow to the dashboard SSE.

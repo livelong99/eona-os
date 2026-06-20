@@ -138,6 +138,37 @@ def _vault_labels(cap: int = 40) -> list[str]:
 # per-run POST /v1/runs/{run_id}/approval handler.
 _APPROVAL_CHOICES = ["once", "session", "always", "deny"]
 
+# Labs "UI Agent Builder": the builder/refine agents run on Opus 4.8 (authoring
+# accuracy), not the default runtime model. Forwarded to the claude_code CLI as
+# --model via the per-request _model_override hook.
+_TOOL_BUILDER_MODEL = "claude-opus-4-8"
+
+# Persona for the deterministic-scaffold ENRICH agent (build endpoint). It is
+# fed the draft + the on-disk scaffold paths and told to enrich, not re-ask.
+_TOOL_BUILDER_ENRICH_PERSONA = (
+    "You are the Hermes Tool Builder, an expert agent-skill author. A tool has "
+    "ALREADY been scaffolded on disk from the user's form draft: a valid "
+    "tool.yaml, a SKILL.md, and references/ step stubs. Your job is to ENRICH "
+    "the scaffold, not to re-interrogate the user or re-ask questions. "
+    "Improve SKILL.md (sharpen the identity, capabilities, and workflow) and "
+    "flesh out each references/<step>.md with concrete, actionable guidance "
+    "derived from the draft's goals and steps. Do NOT modify the tool.yaml "
+    "`tool`, `launch.skill`, or the steps[] ids/refs — they are load-bearing. "
+    "Keep edits confined to the scaffolded skill directory. Be concise and "
+    "concrete; write the kind of skill a fresh agent could execute cold."
+)
+
+# Persona for the refine endpoint — critiques/improves the draft conversationally.
+_TOOL_BUILDER_REFINE_PERSONA = (
+    "You are the Hermes Tool Builder, an expert agent-skill author and critic. "
+    "The user is refining a tool draft (BuilderState: name, tagline, category, "
+    "skill, goals, steps, inputs, outputs, uiNotes) before publishing it. "
+    "Critique and improve the draft: prune redundancy, tighten goals into crisp "
+    "outcomes, sequence the workflow steps, and make inputs/outputs precise. "
+    "Respond conversationally with specific, actionable suggestions the user can "
+    "apply. Be direct and concise."
+)
+
 
 def _manifest_to_dict(m: Any) -> dict:
     """Map a tools.tool_manifest.ToolManifest to the dashboard ToolManifest shape
@@ -174,6 +205,8 @@ def _start_run(
     session_id: str,
     *,
     goal_manager: Optional[Any] = None,
+    model_override: Optional[str] = None,
+    append_system_prompt: Optional[str] = None,
 ) -> None:
     """Register a new run on *adapter* and fire the background asyncio task.
 
@@ -250,9 +283,17 @@ def _start_run(
                 session_id=session_id,
                 stream_delta_callback=_text_cb,
                 tool_progress_callback=event_cb,
+                ephemeral_system_prompt=append_system_prompt,
             )
             adapter._active_run_agents[run_id] = agent
             agent.run_event_callback = on_event_cb
+            # Per-request claude_code hooks (Labs builder/refine): a persona via
+            # --append-system-prompt and Opus 4.8 via --model. Both default to
+            # None elsewhere → unchanged behaviour for normal tool launches.
+            if append_system_prompt:
+                agent._append_system_prompt = append_system_prompt
+            if model_override:
+                agent._model_override = model_override
 
             def _approval_notify(approval_data: Dict[str, Any]) -> None:
                 event = dict(approval_data or {})
@@ -527,6 +568,144 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
             return web.json_response({"graph": fallback, "error": str(exc)})
 
     # ------------------------------------------------------------------
+    # GET /v1/memory/graph — full vault graph (nodes + [[wikilink]] edges)
+    # Cached in-process (mtime/TTL) so the ~3,500-file scan isn't per-request.
+    # ------------------------------------------------------------------
+    async def _memory_graph(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            from gateway.platforms import vault_graph
+            loop = asyncio.get_running_loop()
+            graph = await loop.run_in_executor(None, vault_graph.build_graph)
+            return web.json_response(graph)
+        except Exception as exc:
+            logger.exception("/v1/memory/graph failed")
+            return web.json_response(
+                {"nodes": [], "links": [], "projects": [], "error": str(exc)},
+                status=500,
+            )
+
+    # ------------------------------------------------------------------
+    # GET /v1/memory/note?path=<id> — note detail (content + links/backlinks).
+    # Path is validated to stay within the vault root (traversal → 400).
+    # ------------------------------------------------------------------
+    async def _memory_note(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        rel_path = request.query.get("path", "")
+        if not rel_path:
+            return web.json_response(
+                {"error": "missing_path", "detail": "'path' query param required"},
+                status=400,
+            )
+        try:
+            from gateway.platforms import vault_graph
+            loop = asyncio.get_running_loop()
+            note = await loop.run_in_executor(None, vault_graph.read_note, rel_path)
+        except Exception as exc:
+            logger.exception("/v1/memory/note failed for %r", rel_path)
+            return web.json_response({"error": "read_error", "detail": str(exc)}, status=500)
+        if note is None:
+            return web.json_response(
+                {"error": "invalid_path",
+                 "detail": "path not found or outside the vault"},
+                status=400,
+            )
+        return web.json_response(note)
+
+    # ------------------------------------------------------------------
+    # GET /v1/memory/search?q=&k= — Brain semantic search with a filesystem
+    # full-text fallback. ``source`` reports which lane produced the results.
+    # ------------------------------------------------------------------
+    async def _memory_search(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        query = (request.query.get("q") or "").strip()
+        try:
+            k = int(request.query.get("k", "10"))
+        except (TypeError, ValueError):
+            k = 10
+        k = max(1, min(k, 50))
+        if not query:
+            return web.json_response({"results": [], "source": "filesystem"})
+
+        loop = asyncio.get_running_loop()
+
+        # Lane 1: Brain semantic retrieval. Defensive — a missing/unindexed
+        # Brain (Qdrant unreachable, HERMES_BRAIN_INJECT off) must never 500.
+        brain_results: list[dict] = []
+        try:
+            from gateway.platforms import vault_graph
+
+            def _brain_query() -> list[dict]:
+                from agent.brain import Brain
+                brain = Brain(vault_dir=vault_graph.VAULT_ROOT)
+                result = brain.retrieve(query, k=k)
+
+                graph = vault_graph.build_graph()
+                meta = {n["id"]: n for n in graph["nodes"]}
+                stem_index: dict[str, str] = {}
+                for n in graph["nodes"]:
+                    stem_index.setdefault(Path(n["id"]).stem.lower(), n["id"])
+
+                def _resolve(src: str) -> Optional[str]:
+                    """Map a Brain fact source (abs path / rel path / stem) → node id."""
+                    if not src:
+                        return None
+                    try:
+                        cand = Path(src)
+                        if cand.is_absolute():
+                            nid = cand.resolve().relative_to(vault_graph.VAULT_ROOT).as_posix()
+                            return nid if nid in meta else None
+                    except Exception:
+                        pass
+                    rel = src.lstrip("/")
+                    if rel in meta:
+                        return rel
+                    return stem_index.get(Path(src).stem.lower())
+
+                out: list[dict] = []
+                seen_ids: set[str] = set()
+                for fact in result.similar:
+                    nid = _resolve(fact.source or "")
+                    if nid is None or nid not in meta or nid in seen_ids:
+                        continue
+                    seen_ids.add(nid)
+                    m = meta[nid]
+                    out.append({
+                        "id": nid,
+                        "title": m["title"],
+                        "folder": m["folder"],
+                        "project": m["project"],
+                        "score": float(fact.score),
+                        "snippet": (fact.content or m.get("snippet") or "")[:220],
+                    })
+                    if len(out) >= k:
+                        break
+                return out
+
+            brain_results = await loop.run_in_executor(None, _brain_query)
+        except Exception:
+            logger.debug("/v1/memory/search: Brain lane failed (non-fatal)", exc_info=True)
+            brain_results = []
+
+        if brain_results:
+            return web.json_response({"results": brain_results, "source": "brain"})
+
+        # Lane 2: filesystem full-text fallback.
+        try:
+            from gateway.platforms import vault_graph
+            results = await loop.run_in_executor(None, vault_graph.fts_search, query, k)
+            return web.json_response({"results": results, "source": "filesystem"})
+        except Exception as exc:
+            logger.exception("/v1/memory/search filesystem fallback failed")
+            return web.json_response(
+                {"results": [], "source": "filesystem", "error": str(exc)},
+                status=500,
+            )
+
+    # ------------------------------------------------------------------
     # GET /v1/events — global SSE TaskEvent stream (5-second poll loop)
     # ------------------------------------------------------------------
     async def _events(request: "web.Request") -> "web.StreamResponse":
@@ -799,14 +978,355 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
             status=202,
         )
 
+    # ------------------------------------------------------------------
+    # POST /v1/tools/build — Labs "UI Agent Builder" publish.
+    # Body: {draft: BuilderState}. (1) deterministically scaffold a valid
+    # tool.yaml + SKILL.md + references/ (guarantees a runnable tool even if
+    # the agent step fails); (2) spawn an Opus-4.8 ENRICH agent (builder
+    # persona) to enrich the scaffold, streamed as a run. Returns 202
+    # {tool_id, run_id}.
+    # ------------------------------------------------------------------
+    async def _tool_build(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response(
+                {"error": "invalid_json", "detail": "request body must be JSON"},
+                status=400,
+            )
+        if not isinstance(body, dict):
+            return web.json_response(
+                {"error": "invalid_body", "detail": "request body must be a JSON object"},
+                status=400,
+            )
+
+        draft = body.get("draft")
+        if not isinstance(draft, dict):
+            return web.json_response(
+                {"error": "missing_draft", "detail": "'draft' (BuilderState) is required"},
+                status=400,
+            )
+
+        # (1) Deterministic scaffold — fail at boundary on invalid draft / schema.
+        try:
+            from gateway.platforms.tool_builder import scaffold_tool
+            loop = asyncio.get_running_loop()
+            slug, skill_dir = await loop.run_in_executor(None, scaffold_tool, draft)
+        except ValueError as exc:
+            return web.json_response(
+                {"error": "invalid_draft", "detail": str(exc)}, status=400
+            )
+        except Exception as exc:
+            logger.exception("/v1/tools/build: scaffold failed")
+            return web.json_response(
+                {"error": "scaffold_error", "detail": str(exc)}, status=500
+            )
+
+        # (2) Spawn the Opus-4.8 ENRICH agent. Feed it the draft + scaffold paths;
+        # the persona tells it to enrich, not re-ask. Non-determinism here never
+        # blocks the build — the scaffold above already produced a runnable tool.
+        try:
+            draft_json = json.dumps(draft, ensure_ascii=False)
+        except Exception:
+            draft_json = str(draft)
+        enrich_message = (
+            f"A new tool '{slug}' has been scaffolded at: {skill_dir}\n\n"
+            f"Form draft (BuilderState):\n{draft_json}\n\n"
+            "Enrich the scaffold now: improve SKILL.md and flesh out each "
+            "references/<step>.md from the draft's goals and steps. Use your "
+            "file tools to read the current scaffold and edit it in place. "
+            "Do not change tool.yaml's tool/launch.skill/steps ids."
+        )
+
+        run_id = f"run_{uuid.uuid4().hex}"
+        session_id = f"toolbuild-{slug}-{uuid.uuid4().hex[:8]}"
+        _start_run(
+            adapter, run_id, enrich_message, session_id,
+            model_override=_TOOL_BUILDER_MODEL,
+            append_system_prompt=_TOOL_BUILDER_ENRICH_PERSONA,
+        )
+
+        logger.debug(
+            "tool build: tool_id=%s run_id=%s dir=%s", slug, run_id, skill_dir
+        )
+        return web.json_response({"tool_id": slug, "run_id": run_id}, status=202)
+
+    # ------------------------------------------------------------------
+    # POST /v1/tools/refine — stream an Opus-4.8 tool-builder agent
+    # critiquing/improving a draft. Body: {draft, messages:[{role,content}]}.
+    # Returns an OpenAI-style SSE stream (data: {choices:[{delta:{content}}]})
+    # ending with data:[DONE]. Reuses the chat SSE path + the _model_override
+    # and _append_system_prompt hooks.
+    # ------------------------------------------------------------------
+    async def _tool_refine(request: "web.Request") -> "web.StreamResponse":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response(
+                {"error": "invalid_json", "detail": "request body must be JSON"},
+                status=400,
+            )
+        if not isinstance(body, dict):
+            return web.json_response(
+                {"error": "invalid_body", "detail": "request body must be a JSON object"},
+                status=400,
+            )
+
+        draft = body.get("draft")
+        if not isinstance(draft, dict):
+            return web.json_response(
+                {"error": "missing_draft", "detail": "'draft' (BuilderState) is required"},
+                status=400,
+            )
+        raw_messages = body.get("messages")
+        chat_messages: List[Dict[str, str]] = []
+        if isinstance(raw_messages, list):
+            for m in raw_messages:
+                if not isinstance(m, dict):
+                    continue
+                role = m.get("role")
+                content = m.get("content")
+                if role in {"user", "assistant"} and isinstance(content, str):
+                    chat_messages.append({"role": role, "content": content})
+
+        # Build the agent's user prompt: the draft as context + the latest user
+        # turn. History (prior assistant/user turns) is folded into the prompt so
+        # the single-turn claude_code path sees the full refinement thread.
+        try:
+            draft_json = json.dumps(draft, ensure_ascii=False)
+        except Exception:
+            draft_json = str(draft)
+
+        history_text = ""
+        last_user = ""
+        if chat_messages:
+            # Last user message is the active request; everything before is context.
+            for m in reversed(chat_messages):
+                if m["role"] == "user":
+                    last_user = m["content"]
+                    break
+            prior = chat_messages[:-1] if chat_messages[-1]["role"] == "user" else chat_messages
+            if prior:
+                history_text = "\n".join(
+                    f"{m['role'].upper()}: {m['content']}" for m in prior
+                )
+        if not last_user:
+            last_user = "Critique this draft and suggest concrete improvements."
+
+        prompt_parts = [f"Tool draft (BuilderState):\n{draft_json}"]
+        if history_text:
+            prompt_parts.append(f"Conversation so far:\n{history_text}")
+        prompt_parts.append(f"User: {last_user}")
+        user_message = "\n\n".join(prompt_parts)
+
+        # Stream via the same SSE shape as chat-completions. We run the agent in a
+        # background thread (run_conversation is sync) and drain its delta queue.
+        import queue as _q
+
+        completion_id = f"refine-{uuid.uuid4().hex[:24]}"
+        created = int(time.time())
+        session_id = f"toolrefine-{uuid.uuid4().hex[:8]}"
+        stream_q: "_q.Queue" = _q.Queue()
+        loop = asyncio.get_running_loop()
+
+        def _on_delta(delta: Optional[str]) -> None:
+            if delta is not None:
+                stream_q.put(delta)
+
+        def _run_refine() -> None:
+            try:
+                agent = adapter._create_agent(
+                    session_id=session_id,
+                    stream_delta_callback=_on_delta,
+                    ephemeral_system_prompt=_TOOL_BUILDER_REFINE_PERSONA,
+                )
+                agent._append_system_prompt = _TOOL_BUILDER_REFINE_PERSONA
+                agent._model_override = _TOOL_BUILDER_MODEL
+                agent.run_conversation(
+                    user_message=user_message,
+                    conversation_history=[],
+                    task_id=session_id,
+                )
+            except Exception as exc:
+                logger.exception("/v1/tools/refine agent run failed")
+                stream_q.put(f"\n[refine error: {exc}]")
+            finally:
+                stream_q.put(None)
+
+        agent_task = loop.run_in_executor(None, _run_refine)
+
+        sse_headers = {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        }
+        response = web.StreamResponse(status=200, headers=sse_headers)
+        await response.prepare(request)
+
+        def _chunk(content: str) -> bytes:
+            payload = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "choices": [{"index": 0, "delta": {"content": content}, "finish_reason": None}],
+            }
+            return f"data: {json.dumps(payload)}\n\n".encode()
+
+        try:
+            while True:
+                try:
+                    item = await loop.run_in_executor(
+                        None, lambda: stream_q.get(timeout=0.5)
+                    )
+                except _q.Empty:
+                    if agent_task.done():
+                        # Drain remaining items then stop.
+                        while True:
+                            try:
+                                item = stream_q.get_nowait()
+                            except _q.Empty:
+                                item = None
+                            if item is None:
+                                break
+                            await response.write(_chunk(item))
+                        break
+                    await response.write(b": keepalive\n\n")
+                    continue
+                if item is None:
+                    break
+                await response.write(_chunk(item))
+
+            done = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+            }
+            await response.write(f"data: {json.dumps(done)}\n\n".encode())
+            await response.write(b"data: [DONE]\n\n")
+        except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError):
+            logger.info("/v1/tools/refine SSE client disconnected (%s)", completion_id)
+        finally:
+            try:
+                await agent_task
+            except Exception:
+                pass
+        return response
+
+    # ------------------------------------------------------------------
+    # GET /v1/tools/{tool_id} — single full manifest for the detail view.
+    # Filters discover_manifests() by id. 404 if missing.
+    # ------------------------------------------------------------------
+    async def _tool_get(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+
+        tool_id = request.match_info["tool_id"]
+        if not tool_id or "/" in tool_id or "\\" in tool_id or ".." in tool_id:
+            return web.json_response(
+                {"error": "invalid_tool_id", "detail": "tool_id must be a simple slug"},
+                status=400,
+            )
+        try:
+            from tools.tool_manifest import discover_manifests
+            manifests = discover_manifests()
+        except Exception as exc:
+            logger.exception("/v1/tools/%s: discover_manifests failed", tool_id)
+            return web.json_response(
+                {"error": "manifest_error", "detail": str(exc)}, status=500
+            )
+
+        manifest = next((m for m in manifests if m.tool == tool_id), None)
+        if manifest is None:
+            return web.json_response(
+                {"error": "tool_not_found", "detail": f"No tool for id={tool_id!r}"},
+                status=404,
+            )
+        return web.json_response(_manifest_to_dict(manifest))
+
+    # ------------------------------------------------------------------
+    # DELETE /v1/tools/{tool_id} — remove a user-built tool. Only a dir under
+    # the writable tool root (/opt/data/skills) may be deleted; built-ins
+    # under the read-only /opt/skills are refused with 403.
+    # ------------------------------------------------------------------
+    async def _tool_delete(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+
+        tool_id = request.match_info["tool_id"]
+        if not tool_id or "/" in tool_id or "\\" in tool_id or ".." in tool_id:
+            return web.json_response(
+                {"error": "invalid_tool_id", "detail": "tool_id must be a simple slug"},
+                status=400,
+            )
+
+        try:
+            from tools.tool_manifest import discover_manifests
+            manifests = discover_manifests()
+        except Exception as exc:
+            logger.exception("/v1/tools/%s DELETE: discover_manifests failed", tool_id)
+            return web.json_response(
+                {"error": "manifest_error", "detail": str(exc)}, status=500
+            )
+
+        manifest = next((m for m in manifests if m.tool == tool_id), None)
+        if manifest is None or not manifest.source_path:
+            return web.json_response(
+                {"error": "tool_not_found", "detail": f"No tool for id={tool_id!r}"},
+                status=404,
+            )
+
+        # The tool's skill dir is the parent of its tool.yaml.
+        skill_dir = Path(manifest.source_path).parent
+
+        # Confine deletion to the writable tool root; refuse read-only built-ins.
+        from gateway.platforms.tool_builder import is_within_writable_root
+        resolved = is_within_writable_root(skill_dir)
+        if resolved is None:
+            return web.json_response(
+                {"error": "forbidden",
+                 "detail": "Only user-built tools (under the writable tool root) "
+                           "can be deleted; built-in tools are read-only."},
+                status=403,
+            )
+
+        try:
+            import shutil
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, lambda: shutil.rmtree(resolved))
+        except Exception as exc:
+            logger.exception("/v1/tools/%s DELETE: rmtree failed", tool_id)
+            return web.json_response(
+                {"error": "delete_error", "detail": str(exc)}, status=500
+            )
+
+        logger.info("deleted user-built tool %s at %s", tool_id, resolved)
+        return web.json_response({"deleted": True})
+
     app.router.add_get("/v1/tasks", _tasks)
     app.router.add_get("/v1/memory", _memory)
+    app.router.add_get("/v1/memory/graph", _memory_graph)
+    app.router.add_get("/v1/memory/note", _memory_note)
+    app.router.add_get("/v1/memory/search", _memory_search)
     app.router.add_get("/v1/events", _events)
     app.router.add_get("/v1/tools", _tools)
     app.router.add_get("/v1/approvals", _approvals)
+    # Labs "UI Agent Builder" — static build/refine paths registered BEFORE the
+    # parameterized {tool_id} routes so "build"/"refine" never match as an id.
+    app.router.add_post("/v1/tools/build", _tool_build)
+    app.router.add_post("/v1/tools/refine", _tool_refine)
     app.router.add_post("/v1/tools/{tool_id}/launch", _tool_launch)
+    app.router.add_get("/v1/tools/{tool_id}", _tool_get)
+    app.router.add_delete("/v1/tools/{tool_id}", _tool_delete)
     app.router.add_post("/v1/goal", _goal)
     logger.debug(
         "dashboard data routes registered (/v1/tasks, /v1/memory, /v1/events, "
-        "/v1/tools, /v1/approvals, /v1/tools/{id}/launch, /v1/goal)"
+        "/v1/tools, /v1/approvals, /v1/tools/build, /v1/tools/refine, "
+        "/v1/tools/{id}, /v1/tools/{id}/launch, /v1/goal)"
     )

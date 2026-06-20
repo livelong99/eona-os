@@ -43,7 +43,7 @@ import sqlite3
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 try:
     from aiohttp import web
@@ -1068,6 +1068,12 @@ class APIServerAdapter(BasePlatformAdapter):
             reasoning_config=reasoning_config,
             gateway_session_key=gateway_session_key,
         )
+        # Carry the request's system prompt to the claude_code runtime as the
+        # CLI --append-system-prompt (the only hook that reliably imposes a caller
+        # persona/style, e.g. the dashboard voice "Jarvis" prompt). Scoped: only
+        # requests that actually supply a system prompt get it; normal agent turns
+        # leave this None → no behaviour change.
+        agent._append_system_prompt = ephemeral_system_prompt or None
         return agent
 
     # ------------------------------------------------------------------
@@ -1410,6 +1416,315 @@ class APIServerAdapter(BasePlatformAdapter):
             "platform": "api_server",
             "data": data,
         })
+
+    # ------------------------------------------------------------------
+    # /v1/integrations — unified read+enable surface for the dashboard
+    # ------------------------------------------------------------------
+    #
+    # The Integrations screen reflects two distinct engine mechanisms:
+    #   - "platform" (kind="platform"): gateway messaging adapters whose
+    #     enable flag lives in config.yaml platforms[id].enabled. These can be
+    #     toggled here (POST .../enabled) and the gateway is asked to reconcile.
+    #   - "mcp" (kind="mcp"): MCP-server-backed integrations (Gmail, Notion,
+    #     GitHub, ...). There is no gateway adapter or enable toggle; status is
+    #     derived from ~/.hermes/config.yaml mcp_servers presence + an env
+    #     token. POST .../enabled returns 409 — they're configured via ~/.hermes.
+    #
+    # No secrets are read out or written: tokens live in ~/.hermes/.env and are
+    # only checked for presence (missingEnv), never returned.
+
+    # Backlog "needs bridge/setup" platforms the dashboard lists but the engine
+    # has no gateway adapter for yet. Returned as kind="platform" so the UI shows
+    # them not-configured / not-enabled (honest "needs setup"), never togglable.
+    _UNSUPPORTED_PLATFORM_IDS: Tuple[str, ...] = ("teams", "google_chat")
+
+    # Group B: MCP-backed integrations with no gateway adapter. Each maps to the
+    # env token(s) that must be present for it to count as configured. OAuth /
+    # webhook-based ones (gmail, outlook, googlecalendar, zapier) have no token
+    # gate — they're "configured" once listed under config.yaml mcp_servers.
+    _MCP_INTEGRATIONS: Dict[str, List[str]] = {
+        "gmail": [],
+        "outlook": [],
+        "googlecalendar": [],
+        "notion": ["NOTION_API_KEY"],
+        "github": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
+        "linear": ["LINEAR_API_KEY"],
+        "zapier": [],
+    }
+
+    @staticmethod
+    def _integration_env_present(key: str) -> bool:
+        """True if an env var is set (non-empty) in the running process env."""
+        return bool(os.getenv(key, "").strip())
+
+    def _platform_integration_item(
+        self,
+        entry: Dict[str, Any],
+        runtime: Optional[Dict[str, Any]],
+        gateway_running: bool,
+    ) -> Dict[str, Any]:
+        """Build one kind="platform" item from a catalog entry + live state.
+
+        Per the dashboard contract, ``configured`` = all ``requiredEnv`` present
+        in env (so a platform that needs no token — e.g. webhook — is configured
+        by default), ``enabled`` = config.yaml platforms[id].enabled, and
+        ``running`` is best-effort from the gateway runtime status.
+        """
+        platform_id = entry["id"]
+        required_env = list(entry.get("required_env", ()))
+        missing_env = [k for k in required_env if not self._integration_env_present(k)]
+        configured = len(missing_env) == 0
+
+        enabled = False
+        account = None
+        try:
+            from gateway.config import Platform, load_gateway_config
+
+            gateway_config = load_gateway_config()
+            platform = Platform(platform_id)
+            platform_config = gateway_config.platforms.get(platform)
+            enabled = bool(platform_config and platform_config.enabled)
+            if platform_config and getattr(platform_config, "home_channel", None):
+                hc = platform_config.home_channel
+                account = getattr(hc, "name", None) or getattr(hc, "id", None)
+        except Exception:
+            # Best-effort fallback: no gateway config available (e.g. unknown
+            # plugin id) — derive enable from config.yaml directly.
+            logger.debug("integration: gateway config unavailable for %s", platform_id, exc_info=True)
+            try:
+                from hermes_cli.config import load_config
+
+                cfg = load_config()
+                platforms_cfg = cfg.get("platforms") or {}
+                plat_cfg = platforms_cfg.get(platform_id)
+                enabled = bool(isinstance(plat_cfg, dict) and plat_cfg.get("enabled"))
+            except Exception:
+                enabled = False
+
+        # running: best-effort from the gateway runtime status; fall back to
+        # (enabled and configured) when the gateway exposes nothing per-platform.
+        running = False
+        runtime_platform: Dict[str, Any] = {}
+        if isinstance(runtime, dict):
+            runtime_platforms = runtime.get("platforms")
+            if isinstance(runtime_platforms, dict):
+                rp = runtime_platforms.get(platform_id)
+                if isinstance(rp, dict):
+                    runtime_platform = rp
+        if runtime_platform:
+            state = runtime_platform.get("state")
+            running = state in {"connected", "running", "ready"} or bool(
+                runtime_platform.get("connected")
+            )
+        else:
+            running = bool(gateway_running and enabled and configured)
+
+        return {
+            "id": platform_id,
+            "kind": "platform",
+            "configured": configured,
+            "enabled": enabled,
+            "running": running,
+            "account": account,
+            "requiredEnv": required_env,
+            "missingEnv": missing_env,
+        }
+
+    def _mcp_integration_item(
+        self,
+        integration_id: str,
+        required_env: List[str],
+        mcp_servers: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Build one kind="mcp" item from config.yaml mcp_servers + env tokens."""
+        listed = isinstance(mcp_servers.get(integration_id), dict)
+        missing_env = [k for k in required_env if not self._integration_env_present(k)]
+
+        if required_env:
+            # Token-gated (Notion, GitHub, Linear): configured iff token present.
+            # The mcp_servers stanza is optional — the token is the real gate.
+            configured = len(missing_env) == 0
+        else:
+            # OAuth / webhook based (Gmail, Outlook, Calendar, Zapier): configured
+            # once the server is registered under config.yaml mcp_servers.
+            configured = listed
+
+        return {
+            "id": integration_id,
+            "kind": "mcp",
+            "configured": configured,
+            "enabled": configured,
+            "running": False,
+            "account": None,
+            "requiredEnv": required_env,
+            "missingEnv": missing_env,
+        }
+
+    async def _handle_integrations_list(self, request: "web.Request") -> "web.Response":
+        """GET /v1/integrations — unified platform + MCP integration status."""
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+
+        try:
+            from gateway.platform_catalog import _messaging_platform_catalog
+            from gateway.status import get_running_pid, read_runtime_status
+
+            try:
+                gateway_running = get_running_pid() is not None
+            except Exception:
+                gateway_running = False
+            try:
+                runtime = read_runtime_status()
+            except Exception:
+                runtime = None
+
+            items: List[Dict[str, Any]] = []
+            catalog_ids: set = set()
+            for entry in _messaging_platform_catalog():
+                catalog_ids.add(entry["id"])
+                items.append(
+                    self._platform_integration_item(entry, runtime, gateway_running)
+                )
+
+            # Backlog platforms the dashboard lists but the engine can't drive
+            # yet — surfaced as not-configured/not-enabled "needs setup" items.
+            for backlog_id in self._UNSUPPORTED_PLATFORM_IDS:
+                if backlog_id in catalog_ids:
+                    continue
+                items.append(
+                    {
+                        "id": backlog_id,
+                        "kind": "platform",
+                        "configured": False,
+                        "enabled": False,
+                        "running": False,
+                        "account": None,
+                        "requiredEnv": [],
+                        "missingEnv": [],
+                    }
+                )
+
+            mcp_servers: Dict[str, Any] = {}
+            try:
+                from hermes_cli.config import load_config
+
+                cfg = load_config()
+                raw = cfg.get("mcp_servers")
+                if isinstance(raw, dict):
+                    mcp_servers = raw
+            except Exception:
+                logger.debug("integrations: could not read mcp_servers", exc_info=True)
+
+            for integration_id, required_env in self._MCP_INTEGRATIONS.items():
+                items.append(
+                    self._mcp_integration_item(integration_id, required_env, mcp_servers)
+                )
+        except Exception:
+            logger.exception("GET /v1/integrations failed")
+            return web.json_response(
+                {"error": {"message": "Failed to enumerate integrations", "type": "server_error"}},
+                status=500,
+            )
+
+        return web.json_response({"integrations": items})
+
+    async def _handle_integration_set_enabled(
+        self, request: "web.Request"
+    ) -> "web.Response":
+        """POST /v1/integrations/{id}/enabled — toggle a gateway platform.
+
+        Only kind="platform" integrations are toggleable: this flips
+        config.yaml platforms[id].enabled and asks the gateway to reconcile.
+        MCP-backed integrations return 409 (configured via ~/.hermes). No
+        secrets are written.
+        """
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
+
+        integration_id = request.match_info.get("id", "")
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response(
+                {"error": {"message": "Invalid JSON in request body", "type": "invalid_request_error"}},
+                status=400,
+            )
+
+        enabled = body.get("enabled")
+        if not isinstance(enabled, bool):
+            return web.json_response(
+                {"error": {"message": "Body must include boolean 'enabled'", "type": "invalid_request_error"}},
+                status=400,
+            )
+
+        # MCP-backed integrations are configured via ~/.hermes, not toggleable.
+        if integration_id in self._MCP_INTEGRATIONS:
+            return web.json_response(
+                {"error": {"message": "configured via ~/.hermes"}},
+                status=409,
+            )
+
+        # Confirm it's a known gateway platform before writing config.
+        try:
+            from gateway.platform_catalog import _catalog_lookup
+
+            entry = _catalog_lookup(integration_id)
+        except Exception:
+            entry = None
+        if entry is None:
+            return web.json_response(
+                {"error": {"message": f"Unknown integration '{integration_id}'", "type": "invalid_request_error"}},
+                status=404,
+            )
+
+        # Flip config.yaml platforms[id].enabled (no env/secret writes).
+        try:
+            from hermes_cli.config import load_config, save_config
+
+            cfg = load_config()
+            platforms = cfg.setdefault("platforms", {})
+            if not isinstance(platforms, dict):
+                platforms = {}
+                cfg["platforms"] = platforms
+            platform_cfg = platforms.setdefault(integration_id, {})
+            if not isinstance(platform_cfg, dict):
+                platform_cfg = {}
+                platforms[integration_id] = platform_cfg
+            platform_cfg["enabled"] = enabled
+            save_config(cfg)
+        except Exception:
+            logger.exception("POST /v1/integrations/%s/enabled: config write failed", integration_id)
+            return web.json_response(
+                {"error": {"message": "Failed to persist enabled flag", "type": "server_error"}},
+                status=500,
+            )
+
+        # Ask the gateway to reconcile (best-effort; never fail the request).
+        self._reconcile_gateway_best_effort()
+
+        return web.json_response({"id": integration_id, "enabled": enabled})
+
+    def _reconcile_gateway_best_effort(self) -> None:
+        """Spawn ``hermes gateway restart`` so the platform change takes effect.
+
+        Mirrors the web UI's enable path. Best-effort: a missing CLI or spawn
+        failure is logged but never surfaced to the caller — the config change
+        is already persisted and will apply on the next gateway start.
+        """
+        try:
+            import subprocess
+            import sys as _sys
+
+            subprocess.Popen(
+                [_sys.executable, "-m", "hermes_cli.main", "gateway", "restart"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            logger.debug("integration enable: gateway reconcile spawn failed", exc_info=True)
 
     # ------------------------------------------------------------------
     # /api/sessions — thin client/session resource API
@@ -4342,6 +4657,12 @@ class APIServerAdapter(BasePlatformAdapter):
             self._app.router.add_get("/v1/capabilities", self._handle_capabilities)
             self._app.router.add_get("/v1/skills", self._handle_skills)
             self._app.router.add_get("/v1/toolsets", self._handle_toolsets)
+            # Integrations surface for the dashboard (read status + enable toggle).
+            # Gateway platforms can be toggled; MCP-backed ones are read-only (409).
+            self._app.router.add_get("/v1/integrations", self._handle_integrations_list)
+            self._app.router.add_post(
+                "/v1/integrations/{id}/enabled", self._handle_integration_set_enabled
+            )
             # Session/client control surface (thin wrappers over SessionDB + _run_agent)
             self._app.router.add_get("/api/sessions", self._handle_list_sessions)
             self._app.router.add_post("/api/sessions", self._handle_create_session)
