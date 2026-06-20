@@ -35,3 +35,8 @@ Thumbs.db
 voice-dataset/
 *.onnx
 *.onnx.json
+
+# Replaced Next.js dashboard (superseded by the Vite SPA in dashboard/)
+dashboard-legacy-nextjs/
+# Mockup scaffold promoted into dashboard/
+mockup/

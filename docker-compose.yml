@@ -32,7 +32,12 @@ services:
       - CRAWL4AI_URL=http://crawl4ai:11235
       - QDRANT_URL=http://qdrant:6333
       - CLAUDE_BRIDGE_URL=http://host.docker.internal:8765 # host-side Claude Code bridge
-      - HERMES_TOOL_ROOTS=/opt/skills # where tool.yaml manifests are discovered (Launchpad)
+      # Tool manifests (os.pathsep-separated): built-in skills (read-only) + user-built
+      # tools written by the Labs "UI Agent Builder" into the read-write ~/.hermes mount.
+      - HERMES_TOOL_ROOTS=/opt/skills:/opt/data/skills
+      # Obsidian vault, mounted read-only below — powers the Memory screen graph/search + Brain.
+      - HERMES_VAULT_PATH=/vault
+      - VAULT_DIR=/vault
       # Safety substrate (B1) — active in production; both are fail-safe + conservative.
       - HERMES_TRUST_GATE=1 # gate autonomous/cron acts (blocks irreversible, logs decisions)
       - HERMES_BUDGET_GOVERNOR=1 # allocate compute budget per cron job + record spend
@@ -43,6 +48,8 @@ services:
       - "${HOME}/.hermes:/opt/data"
       # Skill manifests (tool.yaml) for the Agent-Tools Launchpad — read-only.
       - "./.claude/skills:/opt/skills:ro"
+      # Obsidian vault (read-only) — the Memory screen's live graph/search + Brain read from here.
+      - "${VAULT_DIR:-${HOME}/Documents/Obsidian/Vault}:/vault:ro"
     ports:
       - "127.0.0.1:8642:8642" # OpenAI-compatible API + /health
     extra_hosts:
@@ -111,35 +118,35 @@ services:
       # (e.g. jarvis on 6333). In-network service is still qdrant:6333.
       - "127.0.0.1:6533:6333"
     healthcheck:
-      # qdrant ships no curl/wget; use nc (netcat) TCP port check instead.
-      # Port 6333 = REST API; a successful TCP connect means qdrant is up.
-      test: ["CMD-SHELL", "nc -z localhost 6333 || exit 1"]
+      # qdrant image has no nc/curl/wget but does ship bash — probe the REST
+      # port (6333) with a bash /dev/tcp connect; a successful TCP connect = up.
+      test: ["CMD-SHELL", "bash -c '(echo > /dev/tcp/localhost/6333)' || exit 1"]
       interval: 30s
       timeout: 10s
       start_period: 30s
       retries: 3
 
-  dashboard: # Next.js mission control
+  dashboard: # Vite SPA mission control (static build served by nginx)
     build: ./dashboard
     container_name: agenthome-dashboard
     restart: unless-stopped
-    # HERMES_API_KEY comes from ~/.hermes/.env — read server-side by the
-    # /api/hermes proxy route, never exposed to the browser.
+    # Static SPA + an nginx /api/hermes/ → engine proxy. The nginx template
+    # entrypoint runs envsubst at start, injecting HERMES_URL + the bearer
+    # API_SERVER_KEY (from env_file) so the key never ships in the image/browser.
     env_file:
-      - path: ${HOME}/.hermes/.env
+      - path: ${HOME}/.hermes/.env # provides API_SERVER_KEY for the proxy
         required: false
     environment:
-      # Server-side proxy target (compose network) + bearer key (from env_file).
       - HERMES_URL=http://hermes:8642
     ports:
       - "127.0.0.1:3737:3737"
     healthcheck:
-      # node:22-alpine has wget but not curl; probe the root path which Next.js
-      # always returns 200 for when the server is ready.
-      test: ["CMD", "wget", "-qO-", "http://localhost:3737/"]
+      # nginx:alpine ships busybox wget; probe the root path once it serves.
+      # Use 127.0.0.1 (not localhost → ::1) since nginx binds IPv4 0.0.0.0:3737.
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:3737/"]
       interval: 30s
       timeout: 10s
-      start_period: 30s
+      start_period: 20s
       retries: 3
     depends_on:
       hermes:

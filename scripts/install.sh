@@ -2,7 +2,7 @@
 # Agent Home — fresh deploy (Claude-only).
 #
 # Stack: our forked Hermes engine, BUILT from ./engine (bundles the real `claude`
-# CLI) + SearXNG + Crawl4AI + Qdrant + the Next.js dashboard. Every turn is
+# CLI) + SearXNG + Crawl4AI + Qdrant + the Agent OS dashboard. Every turn is
 # delegated to the local `claude` CLI via the "claude_code" runtime, which uses
 # your Claude Code SUBSCRIPTION (CLAUDE_CODE_OAUTH_TOKEN) — no Gemini, no
 # OpenRouter, no per-token API cost. All ports bound to 127.0.0.1.
