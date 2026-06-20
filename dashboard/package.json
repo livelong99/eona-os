@@ -1,28 +1,36 @@
 {
-  "name": "dashboard",
-  "version": "0.1.0",
+  "name": "agent-os-dashboard",
   "private": true,
+  "version": "1.0.0",
+  "type": "module",
   "scripts": {
-    "dev": "next dev -H 127.0.0.1 -p 3737",
-    "build": "next build",
-    "start": "next start -H 127.0.0.1 -p 3737",
-    "lint": "eslint"
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "framer-motion": "^12.40.0",
+    "clsx": "^2.1.1",
     "lucide-react": "^1.20.0",
-    "next": "16.2.9",
-    "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "ogl": "^1.0.11",
+    "onnxruntime-web": "^1.26.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-markdown": "^10.1.0",
+    "react-router-dom": "^7.18.0",
+    "remark-gfm": "^4.0.1",
+    "tailwind-merge": "^2.5.5",
+    "three": "^0.171.0"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "eslint": "^9",
-    "eslint-config-next": "16.2.9",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/node": "^20.19.43",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5.6.0",
+    "vite": "^6.0.0"
   }
 }

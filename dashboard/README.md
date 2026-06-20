@@ -1,40 +1,61 @@
-# Dashboard (`127.0.0.1:3737`)
+# Agent OS — Dashboard
 
-Next.js 16 + Tailwind v4 command surface over the Hermes gateway. Phase 3 — **scaffolded and running**.
+The mission-control UI for Agent OS: a dark-glass single-page app with a top
+liquid-glass dock and eight surfaces — **Home** (Aurora Orb), **Workspace**,
+**Brainstorm**, **Labs**, **Memory** (3D knowledge globe), **Control**,
+**Integrations**, and **Planner**.
 
-## Run
+> **Status:** UI complete, backed by mock data. Engine wiring (Hermes) is the
+> next pass — see _Wiring_ below.
+
+## Stack
+
+- **Vite 6** + **React 19** + **TypeScript** (strict)
+- **Tailwind CSS v4** (`@tailwindcss/vite`)
+- **react-router-dom** (client routing, lazy-loaded per route)
+- **three.js** (Aurora Orb, Memory globe) · **ogl** (SideRays background)
+- `@/*` path alias → `src/*`
+
+## Develop
+
 ```bash
 npm install
-npm run dev      # http://127.0.0.1:3737  (localhost-only by design)
-npm run build    # production build / typecheck / lint
+npm run dev        # http://127.0.0.1:3737
+npm run typecheck  # tsc --noEmit (strict)
+npm run build      # tsc -b && vite build → dist/
+npm run preview    # serve the production build locally
 ```
-Optionally copy `.env.local.example` → `.env.local` to point at a non-default gateway.
 
-## What works now
-- Full dark **shell**: `LOCAL · STUDIO` / `Agentic OS` wordmark, three nav groups, gradient agent icons,
-  vault chip + gateway live/offline pill.
-- **3 screen archetypes:** Chat (Claude/Gemini/Local + tier badge), Board (Kanban + live
-  `task_events` ticker), Graph (Memory "galaxy").
-- **Views:** Mission Control launcher, Prompt Foundry (brief → Google Flow prompt output), Goal Mode.
-- **Offline-first:** `src/lib/hermes.ts` talks to `127.0.0.1:8642`; when the gateway is down it falls back to
-  clearly-labeled mock data, so the UI is demonstrable before Phase 1 is run.
+## Structure
 
-## Wire to real Hermes
-The client targets the Hermes **API server** (`127.0.0.1:8642`, `hermes gateway run`):
-- `GET /health` — gateway health
-- `POST /v1/chat/completions` — OpenAI-compatible chat (agent tabs)
-- `POST /v1/runs` + SSE `GET /v1/runs/{id}/events` — async runs + lifecycle stream (Goal Mode)
-
-Kanban + the memory graph are **not** on the 8642 API server. They live in the Hermes **dashboard
-backend** (`:9119`, auth-gated: `/api/sessions`, WS `/api/ws`) or the kanban CLI/DB — so `getTasks()` and
-`getMemory()` in `src/lib/hermes.ts` use mock data with a TODO to wire :9119 next.
-
-## Layout / structure
 ```
-src/app/        layout, globals (theme), page (shell + view router)
-src/lib/        types, nav (agents + nav config), hermes (client), mock
-src/components/  Sidebar, ui/ (AgentIcon, TierBadge, LivePill, Icon), views/
+src/
+  App.tsx              # shell: SideRays bg + glass dock + routes (lazy)
+  main.tsx             # BrowserRouter mount
+  index.css            # Tailwind v4 + dark theme tokens
+  screens/             # one component per route
+  components/
+    ui/                # glass primitives, dock, orb, markdown, terminal…
+    workspace/ brainstorm/ labs/ control/ integrations/ memory/ planner/
+  lib/                 # per-surface mock data + types (replace at wiring)
+public/icons/          # dock app icons (transparent squircle PNGs)
 ```
-Backend rule: all data via the Hermes REST/WS API — no direct provider calls from the browser.
 
-See `../docs/architecture.md` §4.D.
+All screen state is local React state over the mock data in `src/lib/*`.
+
+## Deploy
+
+`docker compose up dashboard` builds the static bundle and serves it with nginx
+on `127.0.0.1:3737` (`Dockerfile` + `nginx.conf`, SPA fallback for client routes).
+
+## Wiring (next pass)
+
+The data layer is isolated in `src/lib/*`. To go live:
+
+1. Replace the mock arrays with a typed client that calls the engine API.
+2. Enable the `/api/hermes/` proxy in `nginx.conf` (→ `http://hermes:8642`) and a
+   matching `server.proxy` in `vite.config.ts` for dev.
+
+The previous Next.js dashboard — which already contains a working Hermes proxy
+and client (`lib/hermes.ts`, `voice.ts`, `cockpit.ts`, …) — is preserved at
+`../dashboard-legacy-nextjs/` as the reference for that work.
