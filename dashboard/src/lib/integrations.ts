@@ -55,6 +55,7 @@ export const INTEGRATION_META: IntegrationMeta[] = [
   { id: "notion", name: "Notion", slug: "notion", logoColor: "ffffff", color: "#cfd3dc", category: "Productivity", desc: "Read & write pages, databases, and tasks.", setup: "easy" },
   { id: "github", name: "GitHub", slug: "github", logoColor: "ffffff", color: "#cfd3dc", category: "Productivity", desc: "Issues, PRs, and repo actions for the agent.", setup: "easy" },
   { id: "linear", name: "Linear", slug: "linear", color: "#5E6AD2", category: "Productivity", desc: "Create & update issues from conversations.", setup: "easy" },
+  { id: "jira", name: "Jira", slug: "jira", color: "#2684FF", category: "Productivity", desc: "Track issues & sprints; sync them into the planner.", setup: "medium", setupHint: "Set JIRA_URL, JIRA_EMAIL and JIRA_API_TOKEN in ~/.hermes — Cloud uses email + API token; Server/DC uses a personal access token (no email)." },
 
   // Automation
   { id: "webhooks", name: "Webhooks", lucide: "webhook", color: "#a78bfa", category: "Automation", desc: "POST events to any URL; trigger runs from outside.", setup: "easy" },

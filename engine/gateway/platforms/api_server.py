@@ -609,13 +609,43 @@ _SECURITY_HEADERS = {
     "Referrer-Policy": "no-referrer",
 }
 
+# Artifact-raw bodies (e.g. a Brand Maker ``mockup.html``) are rendered inside a
+# SAME-ORIGIN sandboxed <iframe> in the dashboard. The default DENY +
+# frame-ancestors 'none' would block the iframe entirely (Chrome reports it as
+# "refused to connect"), and default-src 'none' would also strip the self-contained
+# document's own inline <style>/images. For these read-only artifact responses we
+# relax framing to SAMEORIGIN and permit the document's inline styles + inline/data
+# images. Scripts stay blocked (no script-src) and are doubly prevented by the
+# iframe's ``sandbox`` (no allow-scripts). Matched by path suffix below.
+_ARTIFACT_RAW_SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'none'; img-src 'self' data: blob:; "
+        "style-src 'unsafe-inline'; font-src 'self' data:; "
+        "frame-ancestors 'self'"
+    ),
+    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+    "Referrer-Policy": "no-referrer",
+}
+
 
 if AIOHTTP_AVAILABLE:
     @web.middleware
     async def security_headers_middleware(request, handler):
-        """Add security headers to all responses (including errors)."""
+        """Add security headers to all responses (including errors).
+
+        Artifact-raw responses (``…/artifacts/raw``) get a relaxed set so a
+        produced HTML artifact can render in the dashboard's same-origin iframe.
+        """
         response = await handler(request)
-        for k, v in _SECURITY_HEADERS.items():
+        headers = (
+            _ARTIFACT_RAW_SECURITY_HEADERS
+            if request.path.endswith("/artifacts/raw")
+            else _SECURITY_HEADERS
+        )
+        for k, v in headers.items():
             response.headers.setdefault(k, v)
         return response
 else:
@@ -1016,6 +1046,7 @@ class APIServerAdapter(BasePlatformAdapter):
         tool_start_callback=None,
         tool_complete_callback=None,
         gateway_session_key: Optional[str] = None,
+        tier: str = "t1",
     ) -> Any:
         """
         Create an AIAgent instance using the gateway's runtime config.
@@ -1074,6 +1105,21 @@ class APIServerAdapter(BasePlatformAdapter):
         # requests that actually supply a system prompt get it; normal agent turns
         # leave this None → no behaviour change.
         agent._append_system_prompt = ephemeral_system_prompt or None
+        # Apply the dashboard Control → Models tier routing. Each surface passes
+        # its tier: chat/voice (home assistant) → "t1" (default here); Labs,
+        # Brainstorm and Workspace runs pass "t2" via _start_run. The effective
+        # resolver honors a saved routing, else the tier default (Tier 1 → keep
+        # the gateway default Sonnet; Tier 2 → Opus). Best-effort — a failure
+        # leaves the config.yaml default. Telegram/Discord/CLI go through
+        # _resolve_gateway_model directly and are intentionally untouched.
+        try:
+            from gateway.platforms import model_config_store
+
+            routed = model_config_store.resolve_tier_model_effective(tier)
+            if routed:
+                agent._model_override = routed
+        except Exception:
+            logger.debug("model routing (%s) unavailable; using default model", tier, exc_info=True)
         return agent
 
     # ------------------------------------------------------------------
@@ -1449,6 +1495,7 @@ class APIServerAdapter(BasePlatformAdapter):
         "notion": ["NOTION_API_KEY"],
         "github": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
         "linear": ["LINEAR_API_KEY"],
+        "jira": ["JIRA_URL", "JIRA_API_TOKEN"],
         "zapier": [],
     }
 

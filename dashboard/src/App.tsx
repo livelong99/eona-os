@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { Routes, Route, useLocation, useNavigate } from "react-router-dom";
 import SideRays from "@/components/SideRays";
+import { ErrorBoundary } from "@/components/ui/ErrorBoundary";
 import {
   GlassDock,
   GlassFilter,
@@ -19,6 +20,8 @@ const BrainstormScreen = lazy(() => named(import("@/screens/BrainstormScreen"), 
 const BrainstormSession = lazy(() => named(import("@/screens/BrainstormSession"), "BrainstormSession"));
 const LabsScreen = lazy(() => named(import("@/screens/LabsScreen"), "LabsScreen"));
 const LabsToolDetail = lazy(() => named(import("@/screens/LabsToolDetail"), "LabsToolDetail"));
+const BrandMakerRun = lazy(() => named(import("@/screens/BrandMakerRun"), "BrandMakerRun"));
+const SwarmToolRun = lazy(() => named(import("@/components/toolkit/SwarmToolRun"), "SwarmToolRun"));
 const MemoryScreen = lazy(() => named(import("@/screens/MemoryScreen"), "MemoryScreen"));
 const ControlScreen = lazy(() => named(import("@/screens/ControlScreen"), "ControlScreen"));
 const IntegrationsScreen = lazy(() => named(import("@/screens/IntegrationsScreen"), "IntegrationsScreen"));
@@ -95,6 +98,7 @@ function App() {
         <GlassDock icons={dockIcons} compact={!isHome} />
       </div>
 
+      <ErrorBoundary key={location.pathname}>
       <Suspense fallback={null}>
       <Routes>
         <Route path="/" element={<HomeScreen />} />
@@ -104,6 +108,8 @@ function App() {
         <Route path="/brainstorm/:id" element={<BrainstormSession />} />
         <Route path="/labs" element={<LabsScreen />} />
         <Route path="/labs/:id" element={<LabsToolDetail />} />
+        <Route path="/labs/run/:toolId/:projectId" element={<SwarmToolRun />} />
+        <Route path="/labs/:toolId/:brandId" element={<BrandMakerRun />} />
         <Route path="/memory" element={<MemoryScreen />} />
         <Route path="/control" element={<ControlScreen />} />
         <Route path="/integrations" element={<IntegrationsScreen />} />
@@ -112,6 +118,7 @@ function App() {
         <Route path="*" element={<HomeScreen />} />
       </Routes>
       </Suspense>
+      </ErrorBoundary>
     </main>
   );
 }

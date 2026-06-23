@@ -35,9 +35,26 @@ services:
       # Tool manifests (os.pathsep-separated): built-in skills (read-only) + user-built
       # tools written by the Labs "UI Agent Builder" into the read-write ~/.hermes mount.
       - HERMES_TOOL_ROOTS=/opt/skills:/opt/data/skills
+      # Where the Tool Forge writes NEW tools (the writable tool root above) + where
+      # its own run sessions land. New tools are discovered on the next /v1/tools fetch.
+      - HERMES_USER_TOOLS_ROOT=/opt/data/skills
+      - HERMES_FORGE_ROOT=/opt/data/tool-forge
       # Obsidian vault, mounted read-only below — powers the Memory screen graph/search + Brain.
       - HERMES_VAULT_PATH=/vault
       - VAULT_DIR=/vault
+      # Brainstorm swarm sessions land in the vault's read-WRITE Brainstorms subtree
+      # (mounted below) so qna.json/readiness.json/prd.md are Obsidian-visible and
+      # the /v1/tools/brainstorm/artifacts endpoints read them back.
+      - HERMES_BRAINSTORM_ROOT=/vault/30_Resources/Brainstorms
+      # Workspaces (the Architect-orchestrated SDLC pipeline) are cloned/copied into
+      # the vault's read-WRITE 10_Projects subtree (mounted below) so the project
+      # tree is Obsidian-visible and the workspace run operates on real files.
+      - HERMES_WORKSPACES_ROOT=/vault/10_Projects
+      # Optional: 21st.dev "magic" MCP for the frontend/UX agents (modern UI refs +
+      # component generation). Off unless a key is provided; agents fall back to the
+      # ui-ux-pro-max / frontend-design skills + web search. Set in your env/.env.
+      - TWENTYFIRST_API_KEY=${TWENTYFIRST_API_KEY:-}
+      # - MAGIC_MCP_ARGS=-y @21st-dev/magic@latest   # override the launch command if needed
       # Safety substrate (B1) — active in production; both are fail-safe + conservative.
       - HERMES_TRUST_GATE=1 # gate autonomous/cron acts (blocks irreversible, logs decisions)
       - HERMES_BUDGET_GOVERNOR=1 # allocate compute budget per cron job + record spend
@@ -50,6 +67,20 @@ services:
       - "./.claude/skills:/opt/skills:ro"
       # Obsidian vault (read-only) — the Memory screen's live graph/search + Brain read from here.
       - "${VAULT_DIR:-${HOME}/Documents/Obsidian/Vault}:/vault:ro"
+      # Nested read-WRITE mount for the Brands subtree only: an in-container Forge
+      # run writes brand artifacts here so they land in the real vault and the
+      # /v1/tools/{id}/artifacts endpoints can read them back. Placed AFTER the
+      # ":/vault:ro" line so the more-specific later mount wins for this subpath.
+      - "${VAULT_DIR:-${HOME}/Documents/Obsidian/Vault}/30_Resources/Brands:/vault/30_Resources/Brands:rw"
+      # Same pattern for the brainstorm swarm: its session folders (qna.json,
+      # readiness.json, prd.md, steering CLAUDE.md, ruflo state) are written here
+      # so they live in the real vault and survive restarts. Matches HERMES_BRAINSTORM_ROOT.
+      - "${VAULT_DIR:-${HOME}/Documents/Obsidian/Vault}/30_Resources/Brainstorms:/vault/30_Resources/Brainstorms:rw"
+      # Workspaces: the SDLC pipeline clones/copies projects here and the agent team
+      # builds + tests against them, so 10_Projects must be read-WRITE in-container.
+      # Matches HERMES_WORKSPACES_ROOT. (agent-home itself lives here — the whole
+      # projects tree becomes writable to the engine.)
+      - "${VAULT_DIR:-${HOME}/Documents/Obsidian/Vault}/10_Projects:/vault/10_Projects:rw"
     ports:
       - "127.0.0.1:8642:8642" # OpenAI-compatible API + /health
     extra_hosts:

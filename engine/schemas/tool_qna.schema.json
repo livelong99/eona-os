@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-home/schemas/tool_qna.schema.json",
+  "title": "Tool clarifying Q&A (qna.json)",
+  "description": "The universal clarification channel for any Agent OS swarm tool. The orchestrator writes open questions here and halts at any stage; the dashboard renders them in QnAView and the user's answers are sent back via /message. Generalizes brainstorm_qna.schema.json (which remains valid).",
+  "type": "object",
+  "required": ["questions"],
+  "additionalProperties": true,
+  "properties": {
+    "project": { "type": "string", "description": "the project/run subject (project, brand, workspace, …)" },
+    "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "brief": { "type": "string" },
+    "stage": { "type": "string", "description": "the current stage/step id the questions belong to" },
+    "phase": { "type": "string", "description": "tool-specific phase marker (free-form)" },
+    "round": { "type": "integer", "minimum": 1 },
+    "summary": { "type": "string" },
+    "open_count": { "type": "integer", "minimum": 0 },
+    "answered_count": { "type": "integer", "minimum": 0 },
+    "questions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "question", "answered"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string" },
+          "agent": { "type": "string", "description": "Specialist/agent that raised this question." },
+          "category": { "type": "string" },
+          "question": { "type": "string" },
+          "why": { "type": "string", "description": "Why this question matters / what it unblocks." },
+          "answer": { "type": "string" },
+          "answered": { "type": "boolean" },
+          "round": { "type": "integer", "minimum": 1 }
+        }
+      }
+    }
+  }
+}

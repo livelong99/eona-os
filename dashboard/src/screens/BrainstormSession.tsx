@@ -1,74 +1,143 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
-import { ArrowLeft, FileText, MessageCircleQuestion, Rocket } from "lucide-react";
+import {
+  ArrowLeft,
+  FileText,
+  MessageCircleQuestion,
+  Gauge,
+  Rocket,
+  Loader,
+} from "lucide-react";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { AgentHome } from "@/components/brainstorm/AgentHome";
 import { RequirementView } from "@/components/brainstorm/RequirementView";
 import { QnAView } from "@/components/brainstorm/QnAView";
+import { ReadinessCard } from "@/components/brainstorm/ReadinessCard";
+import { ExecutionConsole, ALL_AGENTS } from "@/components/brainstorm/ExecutionConsole";
+import { useBrainstormRun } from "@/components/brainstorm/useBrainstormRun";
 import {
-  sessionById,
-  BRAINSTORM_STATUS_META,
-  QUESTIONS,
-  PRD_MARKDOWN,
-  PRD_DRAFT_MARKDOWN,
-  type BrainstormQuestion,
-  type BrainstormStatus,
-} from "@/lib/brainstorm";
+  getLatestRun,
+  getRunStatus,
+  BRAINSTORM_TOOL_ID,
+} from "@/lib/brainstorm/brainstormClient";
+import { createWorkspace } from "@/lib/workspace/workspaceClient";
 
-type RightView = "requirement" | "qna";
+type RightView = "qna" | "readiness" | "requirement";
 
-// Follow-up questions the team asks after the first round of answers (mockup).
-const FOLLOWUPS: Omit<BrainstormQuestion, "answered" | "answer">[] = [
-  { id: "f1", agent: "Nova", category: "Edge cases", question: "What happens on a day with no input — silence, a nudge, or a recap of yesterday?" },
-  { id: "f2", agent: "Piper", category: "Scope", question: "For v1, which single platform do we ship first — web, iOS, or desktop?" },
-  { id: "f3", agent: "Cit", category: "Risk", question: "What's the biggest reason this could fail, and how do we de-risk it early?" },
-];
+interface NavState {
+  title?: string;
+  brief?: string;
+  runId?: string;
+  sessionId?: string;
+}
+
+interface Resolved {
+  phase: "loading" | "ready" | "missing";
+  runId: string | null;
+  live: boolean;
+}
 
 export function BrainstormSession() {
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
-  const navState = location.state as { title?: string; brief?: string } | null;
+  const navState = (location.state as NavState | null) ?? null;
+  const slug = id ?? "";
 
-  const found = sessionById(id);
-  const title = found?.title ?? navState?.title ?? "New idea";
-  const brief = found?.brief ?? navState?.brief ?? "A fresh idea, just handed to the team.";
-  const status: BrainstormStatus = found?.status ?? "drafting";
-  const statusMeta = BRAINSTORM_STATUS_META[status];
-  const ready = status === "prd-ready";
-  const generating = status === "drafting";
-  const markdown = generating ? PRD_DRAFT_MARKDOWN : PRD_MARKDOWN;
+  // Resolve the run: fresh launch passes runId via nav state; a deep-link / hard
+  // reload recovers it from the latest run for this slug + its liveness.
+  const [resolved, setResolved] = useState<Resolved>({
+    phase: navState?.runId ? "ready" : "loading",
+    runId: navState?.runId ?? null,
+    live: Boolean(navState?.runId),
+  });
 
-  const [view, setView] = useState<RightView>(ready ? "requirement" : "qna");
-  const [questions, setQuestions] = useState<BrainstormQuestion[]>(QUESTIONS);
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [processing, setProcessing] = useState(false);
-  const [followIdx, setFollowIdx] = useState(0);
-
-  const submitAnswers = () => {
-    setQuestions((prev) =>
-      prev.map((q) => {
-        const draft = (drafts[q.id] ?? "").trim();
-        return !q.answered && draft ? { ...q, answered: true, answer: draft } : q;
-      }),
-    );
-    setDrafts({});
-    setProcessing(true);
-    window.setTimeout(() => {
-      if (followIdx < FOLLOWUPS.length) {
-        const next = FOLLOWUPS[followIdx];
-        setQuestions((prev) => [{ ...next, answer: "", answered: false }, ...prev]);
-        setFollowIdx((i) => i + 1);
+  useEffect(() => {
+    if (navState?.runId) return; // already have a live run from launch
+    let cancelled = false;
+    (async () => {
+      try {
+        const latest = await getLatestRun(BRAINSTORM_TOOL_ID, slug);
+        if (cancelled) return;
+        if (!latest) {
+          setResolved({ phase: "missing", runId: null, live: false });
+          return;
+        }
+        const status = await getRunStatus(latest.run_id);
+        if (cancelled) return;
+        setResolved({
+          phase: "ready",
+          runId: latest.run_id,
+          live: Boolean(status?.live),
+        });
+      } catch {
+        if (!cancelled) setResolved({ phase: "missing", runId: null, live: false });
       }
-      setProcessing(false);
-    }, 1400);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [slug, navState?.runId]);
+
+  const { lanes, qna, readiness, prd, phase, streaming, submitAnswers } = useBrainstormRun(
+    resolved.runId,
+    { streamLive: resolved.live },
+  );
+
+  const title = qna?.project || navState?.title || slug || "New idea";
+  const brief = qna?.brief || navState?.brief || "A fresh idea, just handed to the swarm.";
+  const ready = phase === "prd-ready";
+
+  const [view, setView] = useState<RightView>("qna");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [promoting, setPromoting] = useState(false);
+  const [selectedAgent, setSelectedAgent] = useState<string>(ALL_AGENTS);
+
+  // When the PRD lands, surface it.
+  useEffect(() => {
+    if (ready) setView("requirement");
+  }, [ready]);
+
+  const openQuestions = useMemo(
+    () => (qna?.questions ?? []).filter((q) => !q.answered),
+    [qna],
+  );
+
+  const handleSubmit = async () => {
+    const answers: Record<string, string> = {};
+    for (const q of openQuestions) {
+      const v = (drafts[q.id] ?? "").trim();
+      if (v) answers[q.id] = v;
+    }
+    if (Object.keys(answers).length === 0) return;
+    setDrafts({});
+    await submitAnswers(answers);
+  };
+
+  const handlePromote = async () => {
+    if (!resolved.runId) return;
+    setPromoting(true);
+    try {
+      // Promote = create a workspace from this brainstorm: the engine copies the
+      // PRD into 10_Projects/{slug} and launches the Architect orchestrator.
+      const res = await createWorkspace({
+        name: title,
+        source_type: "brainstorm",
+        source_ref: slug,
+      });
+      navigate(`/workspace/${res.workspace_id}`, {
+        state: { name: title, runId: res.run_id, sessionId: res.session_id },
+      });
+    } catch {
+      setPromoting(false);
+    }
   };
 
   return (
     <section className="absolute inset-0 z-10 flex justify-center px-[3vw] pb-5 pt-20">
-      <div className="flex w-full max-w-[1440px] gap-4">
-        {/* Left: agent home */}
-        <GlassPanel className="w-[300px] shrink-0">
+      <div className="flex w-full max-w-[1600px] gap-4">
+        {/* Left: swarm roster + brief */}
+        <GlassPanel className="w-[280px] shrink-0">
           <div className="flex h-full flex-col gap-3 p-4">
             <header className="flex items-start gap-2">
               <button
@@ -86,10 +155,10 @@ export function BrainstormSession() {
                 <p className="mt-0.5 inline-flex items-center gap-1.5 text-[11px] text-white/50">
                   <span
                     aria-hidden
-                    className={`h-1.5 w-1.5 rounded-full ${statusMeta.pulse ? "animate-pulse" : ""}`}
-                    style={{ background: statusMeta.color }}
+                    className={`h-1.5 w-1.5 rounded-full ${streaming ? "animate-pulse" : ""}`}
+                    style={{ background: ready ? "#34d399" : "#4f8cff" }}
                   />
-                  {statusMeta.label}
+                  {ready ? "PRD ready" : streaming ? "Swarm working" : "Refining"}
                 </p>
               </div>
             </header>
@@ -102,44 +171,68 @@ export function BrainstormSession() {
             </div>
 
             <div className="min-h-0 flex-1">
-              <AgentHome />
+              <AgentHome lanes={lanes} selectedId={selectedAgent} onSelect={setSelectedAgent} />
             </div>
           </div>
         </GlassPanel>
 
-        {/* Right: requirement / QnA */}
+        {/* Center: glass-box execution */}
         <GlassPanel className="min-w-0 flex-1">
-          <header className="flex items-center gap-3 px-4 py-3">
-            {/* segmented toggle */}
+          <div
+            className="m-3 h-[calc(100%-1.5rem)] overflow-hidden rounded-xl border border-white/[0.08]"
+            style={{ background: "rgba(0,0,0,0.22)" }}
+          >
+            {resolved.phase === "loading" ? (
+              <Centered>
+                <Loader className="h-4 w-4 animate-spin text-white/50" /> Resolving run…
+              </Centered>
+            ) : resolved.phase === "missing" ? (
+              <Centered>No run found for this idea yet.</Centered>
+            ) : (
+              <ExecutionConsole lanes={lanes} streaming={streaming} selectedId={selectedAgent} />
+            )}
+          </div>
+        </GlassPanel>
+
+        {/* Right: Q&A / Readiness / PRD */}
+        <GlassPanel className="w-[440px] shrink-0">
+          <header className="flex items-center gap-2 px-4 py-3">
             <div className="flex gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-1">
-              <ToggleButton
-                active={view === "requirement"}
-                onClick={() => setView("requirement")}
-                icon={<FileText className="h-4 w-4" />}
-                label="Requirement"
-              />
               <ToggleButton
                 active={view === "qna"}
                 onClick={() => setView("qna")}
                 icon={<MessageCircleQuestion className="h-4 w-4" />}
                 label="Q&A"
               />
+              <ToggleButton
+                active={view === "readiness"}
+                onClick={() => setView("readiness")}
+                icon={<Gauge className="h-4 w-4" />}
+                label="Readiness"
+              />
+              <ToggleButton
+                active={view === "requirement"}
+                onClick={() => setView("requirement")}
+                icon={<FileText className="h-4 w-4" />}
+                label="PRD"
+              />
             </div>
 
             <div className="ml-auto">
-              {ready ? (
+              {ready && (
                 <button
                   type="button"
-                  onClick={() => navigate("/workspace")}
-                  className="flex items-center gap-2 rounded-lg bg-[#34d399]/15 px-3.5 py-1.5 text-[13px] font-semibold text-[#34d399] transition-colors duration-200 hover:bg-[#34d399]/25 cursor-pointer"
+                  onClick={handlePromote}
+                  disabled={promoting}
+                  className="flex items-center gap-2 rounded-lg bg-[#34d399]/15 px-3 py-1.5 text-[12.5px] font-semibold text-[#34d399] transition-colors duration-200 hover:bg-[#34d399]/25 disabled:opacity-50 cursor-pointer"
                 >
-                  <Rocket className="h-4 w-4" />
-                  Promote to workspace
+                  {promoting ? (
+                    <Loader className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Rocket className="h-4 w-4" />
+                  )}
+                  Promote
                 </button>
-              ) : (
-                <span className="text-[12px] text-white/45">
-                  {found?.progress ?? 15}% refined
-                </span>
               )}
             </div>
           </header>
@@ -149,17 +242,20 @@ export function BrainstormSession() {
               className="h-full min-h-0 overflow-hidden rounded-xl border border-white/[0.08]"
               style={{ background: "rgba(0,0,0,0.22)" }}
             >
-              {view === "requirement" ? (
-                <RequirementView markdown={markdown} generating={generating} />
-              ) : (
+              {view === "qna" ? (
                 <QnAView
-                  questions={questions}
+                  questions={qna?.questions ?? []}
                   drafts={drafts}
-                  onDraftChange={(qid, value) =>
-                    setDrafts((d) => ({ ...d, [qid]: value }))
-                  }
-                  onSubmit={submitAnswers}
-                  processing={processing}
+                  onDraftChange={(qid, value) => setDrafts((d) => ({ ...d, [qid]: value }))}
+                  onSubmit={handleSubmit}
+                  processing={streaming}
+                />
+              ) : view === "readiness" ? (
+                <ReadinessCard readiness={readiness} />
+              ) : (
+                <RequirementView
+                  markdown={prd ?? "_The PRD is drafted once the product is dev-ready._"}
+                  generating={!prd && streaming}
                 />
               )}
             </div>
@@ -167,6 +263,14 @@ export function BrainstormSession() {
         </GlassPanel>
       </div>
     </section>
+  );
+}
+
+function Centered({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex h-full items-center justify-center gap-2 px-6 text-center text-[12.5px] text-white/45">
+      {children}
+    </div>
   );
 }
 
@@ -186,7 +290,7 @@ function ToggleButton({
       type="button"
       onClick={onClick}
       aria-pressed={active}
-      className={`flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-[13px] font-medium transition-colors duration-200 cursor-pointer ${
+      className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-[12.5px] font-medium transition-colors duration-200 cursor-pointer ${
         active
           ? "bg-white/10 text-white shadow-[inset_0_1px_1px_rgba(255,255,255,0.18)]"
           : "text-white/55 hover:text-white/80"

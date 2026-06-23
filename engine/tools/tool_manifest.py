@@ -61,6 +61,9 @@ class ToolManifest:
     inputs: List[Dict[str, Any]] = field(default_factory=list)
     artifacts_root: Optional[str] = None
     brain: Dict[str, Any] = field(default_factory=dict)
+    swarm: bool = False
+    steering: Optional[str] = None
+    permission_mode: Optional[str] = None
     source_path: Optional[str] = None
 
 
@@ -164,6 +167,9 @@ def _map_manifest(raw: Dict[str, Any], source_path: str) -> ToolManifest:
         inputs=list(raw.get("inputs", [])),
         artifacts_root=raw.get("artifacts_root"),
         brain=dict(raw.get("brain", {})),
+        swarm=bool(raw.get("swarm", False)),
+        steering=raw.get("steering"),
+        permission_mode=raw.get("permission_mode"),
         source_path=source_path,
     )
 

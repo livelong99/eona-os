@@ -1,0 +1,131 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-home/schemas/workspace_state.schema.json",
+  "title": "Workspace pipeline state (workspace.json)",
+  "description": "The phase/state of an Architect-orchestrated, feature-oriented workspace. Written by the orchestrator every turn and rendered by the dashboard; it halts at gates and the dashboard resumes via /message. Top-level `phase` tracks the workspace SETUP lifecycle; each feature in `features[]` carries its OWN design→sprint→implement cycle, maintained as an OpenSpec change under openspec/changes/{slug}/.",
+  "type": "object",
+  "required": ["name", "slug", "phase"],
+  "additionalProperties": true,
+  "$defs": {
+    "featurePhase": {
+      "type": "string",
+      "enum": [
+        "designing", "design-qna", "design-review", "design-approved",
+        "sprint-planning", "sprint-qna", "sprint-approved",
+        "implementing", "done"
+      ]
+    },
+    "gates": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "design": { "type": "string", "enum": ["pending", "approved"] },
+        "sprint": { "type": "string", "enum": ["pending", "approved"] }
+      }
+    },
+    "sprint": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "current_story": { "type": "string" },
+        "stories": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "status"],
+            "additionalProperties": true,
+            "properties": {
+              "id": { "type": "string" },
+              "title": { "type": "string" },
+              "epic": { "type": "string" },
+              "status": { "type": "string", "enum": ["backlog", "ready-for-dev", "in-progress", "review", "approved", "done", "blocked"] },
+              "review": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "verdict": { "type": "string", "enum": ["pass", "changes-requested", "pending"] },
+                  "findings": { "type": "string" },
+                  "file": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "properties": {
+    "name": { "type": "string" },
+    "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "path": { "type": "string", "description": "Absolute workspace folder (the run's cwd)." },
+    "source": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "type": { "type": "string", "enum": ["folder", "github", "brainstorm"] },
+        "ref": { "type": "string", "description": "source path, github url, or brainstorm run/slug" }
+      }
+    },
+    "phase": {
+      "description": "Workspace SETUP lifecycle. Once `ready`, work happens per-feature (see features[]). The feature-cycle values are also allowed for back-compat with a single implicit feature.",
+      "type": "string",
+      "enum": [
+        "ingesting", "provisioning", "documenting", "ready",
+        "designing", "design-qna", "design-review", "design-approved",
+        "sprint-planning", "sprint-qna", "sprint-approved",
+        "implementing", "done", "working"
+      ]
+    },
+    "mode": { "type": "string", "enum": ["manual", "auto"], "default": "manual" },
+    "team": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "role"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "role": { "type": "string" },
+          "file": { "type": "string", "description": "relative path to the generated agent definition" }
+        }
+      }
+    },
+    "scripts": {
+      "type": "object",
+      "description": "Relative paths to the build/run/test scripts the team authored at provisioning.",
+      "additionalProperties": true,
+      "properties": {
+        "build": { "type": "string" },
+        "run": { "type": "string" },
+        "test": { "type": "string" }
+      }
+    },
+    "active_feature": { "type": "string", "description": "slug of the feature currently being worked" },
+    "features": {
+      "type": "array",
+      "description": "One entry per feature. Each is an OpenSpec change at openspec/changes/{slug}/.",
+      "items": {
+        "type": "object",
+        "required": ["slug", "title", "phase"],
+        "additionalProperties": true,
+        "properties": {
+          "id": { "type": "string" },
+          "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "phase": { "$ref": "#/$defs/featurePhase" },
+          "change_dir": { "type": "string", "description": "openspec/changes/{slug}/" },
+          "gates": { "$ref": "#/$defs/gates" },
+          "sprint": { "$ref": "#/$defs/sprint" },
+          "summary": { "type": "string" },
+          "created": { "type": "number" }
+        }
+      }
+    },
+    "gates": { "$ref": "#/$defs/gates", "description": "back-compat: a single implicit feature's gates" },
+    "sprint": { "$ref": "#/$defs/sprint", "description": "back-compat: a single implicit feature's sprint" },
+    "summary": { "type": "string", "description": "one-line status the orchestrator surfaces to the user" },
+    "updated": { "type": "number" }
+  }
+}

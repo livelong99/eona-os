@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-home/schemas/brainstorm_readiness.schema.json",
+  "title": "Brainstorm readiness scorecard (readiness.json)",
+  "description": "Per-metric readiness scorecard written by the Sage PM agent. Gates the done decision: dev_ready is true only when every metric is at/above its threshold. Rendered by the dashboard ReadinessCard.",
+  "type": "object",
+  "required": ["metrics", "dev_ready"],
+  "additionalProperties": true,
+  "properties": {
+    "metrics": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["key", "label", "score", "threshold"],
+        "additionalProperties": true,
+        "properties": {
+          "key": { "type": "string", "enum": ["creativity", "feasibility", "reliability", "roadmap", "completeness"] },
+          "label": { "type": "string" },
+          "score": { "type": "number", "minimum": 0, "maximum": 1 },
+          "threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+          "notes": { "type": "string" }
+        }
+      }
+    },
+    "overall": { "type": "number", "minimum": 0, "maximum": 1 },
+    "dev_ready": { "type": "boolean" },
+    "blocking": { "type": "array", "items": { "type": "string" } }
+  }
+}

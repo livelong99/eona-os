@@ -1,6 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2, CircleCheck, CircleAlert, Terminal } from "lucide-react";
-import { streamRun, type RunEvent } from "@/lib/labs/toolsClient";
+import { streamRun, isStreamNotLive } from "@/lib/labs/toolsClient";
+import {
+  deltaText,
+  reasoningText,
+  toolActivity,
+  terminalState,
+  terminalText,
+  looksLikeError,
+} from "@/components/labs/workbenchText";
 
 type RunPhase = "running" | "done" | "failed";
 
@@ -20,48 +28,21 @@ interface ConsoleLine {
   text: string;
 }
 
-// Maps an engine run event to a renderable console line. Tolerant of the loose
-// RunEvent shape — falls back to a JSON dump when there's no text payload.
-function toLine(event: RunEvent, id: number): ConsoleLine | null {
-  const type = (event.type ?? "").toLowerCase();
-  const text =
-    event.text ??
-    (typeof event.status === "string" ? event.status : "") ??
-    "";
-  if (type === "error") {
-    return { id, kind: "error", text: text || "Run failed." };
-  }
-  if (type === "progress" || type === "status") {
-    if (!text) return null;
-    return { id, kind: type === "progress" ? "progress" : "status", text };
-  }
-  if (text) return { id, kind: "output", text };
-  // Unknown event with no text — surface compactly for debugging.
-  const dump = JSON.stringify(event);
-  if (dump === "{}") return null;
-  return { id, kind: "output", text: dump };
-}
-
-function isTerminal(event: RunEvent): "done" | "failed" | null {
-  const type = (event.type ?? "").toLowerCase();
-  const status = (event.status ?? "").toLowerCase();
-  if (type === "done" || status === "done" || status === "completed" || status === "succeeded") {
-    return "done";
-  }
-  if (type === "error" || status === "failed" || status === "error") {
-    return "failed";
-  }
-  return null;
-}
-
-// RunConsole — subscribes to a run's SSE event stream and renders streamed
-// output with a running/done/failed state. Reused for build runs and tool runs.
+// RunConsole — subscribes to a run's SSE event stream and renders it as a
+// readable console. Reused for build runs and tool runs. Renders the engine's
+// run-event protocol (engine/agent/run_events.py): `message.delta` streams into
+// a single growing output line; `reasoning.available` and real `tool.*` events
+// are dim status/progress lines; the noisy "trace" pseudo-tool is dropped — no
+// raw event JSON ever reaches the screen.
 export function RunConsole({ runId, title = "Run", onComplete, className }: RunConsoleProps) {
   const [lines, setLines] = useState<ConsoleLine[]>([]);
   const [phase, setPhase] = useState<RunPhase>("running");
   const [error, setError] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const counter = useRef(0);
+  // Id of the live output line currently accumulating message.delta chunks, so
+  // streamed text grows in place instead of one line per token.
+  const outId = useRef<number | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -70,6 +51,7 @@ export function RunConsole({ runId, title = "Run", onComplete, className }: RunC
     setPhase("running");
     setError(null);
     counter.current = 0;
+    outId.current = null;
 
     const settle = (next: "done" | "failed") => {
       if (settled) return;
@@ -78,18 +60,72 @@ export function RunConsole({ runId, title = "Run", onComplete, className }: RunC
       onComplete?.(next);
     };
 
+    const pushLine = (kind: ConsoleLine["kind"], text: string) => {
+      if (!text) return;
+      outId.current = null; // any non-delta line breaks the streaming buffer
+      setLines((prev) => [...prev, { id: counter.current++, kind, text }]);
+    };
+
+    const appendDelta = (delta: string) => {
+      setLines((prev) => {
+        if (outId.current !== null) {
+          return prev.map((l) =>
+            l.id === outId.current ? { ...l, text: l.text + delta } : l,
+          );
+        }
+        const id = counter.current++;
+        outId.current = id;
+        return [...prev, { id, kind: "output", text: delta }];
+      });
+    };
+
     streamRun(runId, {
       signal: controller.signal,
       onEvent: (event) => {
-        const line = toLine(event, counter.current++);
-        if (line) setLines((prev) => [...prev, line]);
-        const terminal = isTerminal(event);
-        if (terminal) settle(terminal);
+        const term = terminalState(event);
+        if (term === "failed" || term === "cancelled") {
+          setError(terminalText(event) || "Run failed.");
+          settle("failed");
+          return;
+        }
+
+        const delta = deltaText(event);
+        if (delta) {
+          appendDelta(delta);
+          return;
+        }
+        const reasoning = reasoningText(event);
+        if (reasoning) {
+          pushLine("status", reasoning);
+          return;
+        }
+        const activity = toolActivity(event);
+        if (activity) {
+          pushLine("progress", activity);
+          return;
+        }
+        if (term === "done") {
+          const out = terminalText(event);
+          if (out && looksLikeError(out)) {
+            setError(out);
+            settle("failed");
+            return;
+          }
+          if (out && outId.current === null) pushLine("output", out);
+          settle("done");
+        }
       },
     })
       .then(() => settle("done"))
       .catch((err: unknown) => {
         if (controller.signal.aborted) return;
+        // 404 = the run isn't live (already finished / no active stream). Settle
+        // terminally and quietly — the effect is keyed on runId, so it won't
+        // re-subscribe, and we avoid a hard error / retry loop.
+        if (isStreamNotLive(err)) {
+          settle("done");
+          return;
+        }
         setError(err instanceof Error ? err.message : "Stream interrupted.");
         settle("failed");
       });

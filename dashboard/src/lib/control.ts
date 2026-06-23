@@ -83,10 +83,8 @@ export interface ModelInfo {
 }
 
 export const MODELS: ModelInfo[] = [
-  { id: "opus-4-8", name: "Opus 4.8", tier: "Reasoning", context: "200K", cost: "$15 / $75", role: "Architecture, security, deep reasoning", enabled: true, color: "#a78bfa" },
-  { id: "sonnet-4-6", name: "Sonnet 4.6", tier: "Balanced", context: "200K", cost: "$3 / $15", role: "Main development & orchestration", enabled: true, color: "#4f8cff" },
-  { id: "haiku-4-5", name: "Haiku 4.5", tier: "Fast", context: "200K", cost: "$1 / $5", role: "Workers & high-frequency tasks", enabled: true, color: "#34d399" },
-  { id: "fable-5", name: "Fable 5", tier: "Creative", context: "200K", cost: "$5 / $25", role: "Brand, narrative & creative", enabled: false, color: "#f4c14d" },
+  { id: "claude-sonnet-4-6", name: "Sonnet 4.6", tier: "Balanced", context: "200K", cost: "$3 / $15", role: "Fast, capable all-rounder", enabled: true, color: "#4f8cff" },
+  { id: "claude-opus-4-8", name: "Opus 4.8", tier: "Reasoning", context: "200K", cost: "$15 / $75", role: "Deepest reasoning for heavy creative & coding work", enabled: true, color: "#a78bfa" },
 ];
 
 // 3-tier routing → which model handles each tier
@@ -98,9 +96,8 @@ export interface RoutingTier {
   options: string[];
 }
 export const ROUTING: RoutingTier[] = [
-  { id: "t3", tier: "Tier 3 · Reasoning", desc: "Architecture, security, complex analysis", model: "Opus 4.8", options: ["Opus 4.8", "Sonnet 4.6"] },
-  { id: "t2", tier: "Tier 2 · Standard", desc: "Main coding & orchestration", model: "Sonnet 4.6", options: ["Sonnet 4.6", "Opus 4.8", "Haiku 4.5"] },
-  { id: "t1", tier: "Tier 1 · Fast", desc: "Workers, simple transforms", model: "Haiku 4.5", options: ["Haiku 4.5", "Sonnet 4.6"] },
+  { id: "t1", tier: "Tier 1 · Voice & Planner", desc: "Home voice agent and the planner", model: "Sonnet 4.6", options: ["Sonnet 4.6", "Opus 4.8"] },
+  { id: "t2", tier: "Tier 2 · Brainstorm, Tools & Workspace", desc: "Brainstorming, Labs tools, and the workspace", model: "Opus 4.8", options: ["Sonnet 4.6", "Opus 4.8"] },
 ];
 
 // ── Feature enablement ───────────────────────────────────────────────────────

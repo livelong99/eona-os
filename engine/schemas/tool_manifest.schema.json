@@ -28,7 +28,7 @@
         "properties": {
           "id": { "type": "string" },
           "label": { "type": "string" },
-          "type": { "type": "string", "enum": ["text", "textarea", "file", "file[]", "select"], "default": "text" },
+          "type": { "type": "string", "enum": ["text", "textarea", "file", "file[]", "image", "image[]", "select"], "default": "text" },
           "required": { "type": "boolean", "default": false },
           "options": { "type": "array", "items": { "type": "string" } }
         }
@@ -48,11 +48,14 @@
           "ref": { "type": "string", "description": "Path to the skill reference/stage doc." },
           "hitl": { "type": "boolean", "default": false, "description": "Human-in-the-loop gate." },
           "artifacts": { "type": "array", "items": { "type": "string" }, "description": "Output globs this step produces." },
-          "ui": { "type": "string", "enum": ["chat", "form", "artifact-iframe", "file-cards", "custom"], "default": "chat", "description": "Per-step UI hint for the Workbench." }
+          "ui": { "type": "string", "enum": ["chat", "form", "artifact-iframe", "file-cards", "qna-json", "custom"], "default": "chat", "description": "Per-step UI hint for the Workbench." }
         }
       }
     },
     "artifacts_root": { "type": "string", "description": "Template path for outputs, e.g. {project}/resources/branding/Brands/{brand}/" },
+    "swarm": { "type": "boolean", "default": false, "description": "When true, the run is widened to allow the native Task tool + the claude-flow (Ruflo) MCP server, and the session folder is provisioned with `ruflo init` + a steering CLAUDE.md before the agent's first turn." },
+    "steering": { "type": "string", "description": "Filename of a steering doc (relative to the skill's assets/, written as CLAUDE.md into the provisioned session folder) that instructs the orchestrating agent." },
+    "permission_mode": { "type": "string", "enum": ["default", "acceptEdits", "auto", "bypassPermissions"], "description": "Claude Code permission mode for the run. Autonomous tools that must write into .claude/ and implement code unattended use 'bypassPermissions' (the container is the sandbox). Omit for the curated default (acceptEdits)." },
     "brain": {
       "type": "object",
       "additionalProperties": false,

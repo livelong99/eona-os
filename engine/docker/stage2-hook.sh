@@ -418,6 +418,35 @@ if [ -d "$INSTALL_DIR/skills" ]; then
         || echo "[stage2] Warning: skills_sync.py failed; continuing"
 fi
 
+# --- Expose launchable tool-skills to the bundled `claude` CLI ---
+# Hermes Tools (skills carrying a tool.yaml) are launched by the API server as
+# `/{skill}` slash commands inside the `claude` CLI. The CLI only discovers
+# skills under $CLAUDE_CONFIG_DIR/skills (or a cwd .claude/skills) — NOT under
+# the Hermes tool roots ($HERMES_TOOL_ROOTS, e.g. /opt/skills:/opt/data/skills),
+# so without a bridge a launch dies with "Unknown command: /{skill}". We symlink
+# ONLY tool.yaml-bearing skills (the Labs "UI Agent Builder" tools) into the
+# CLI's config-skills dir — deliberately not every mounted skill, so the CLI's
+# per-turn skill-metadata context (and the voice/chat latency) stays lean.
+# Idempotent: `ln -sfn` refreshes existing links each boot.
+as_hermes sh -c '
+    cli_dir="${CLAUDE_CONFIG_DIR:-${HERMES_HOME:-/opt/data}/.claude}/skills"
+    mkdir -p "$cli_dir"
+    roots="${HERMES_TOOL_ROOTS:-/opt/skills:/opt/data/skills}"
+    n=0
+    OLDIFS=$IFS; IFS=:
+    for root in $roots; do
+        IFS=$OLDIFS
+        [ -d "$root" ] || { IFS=:; continue; }
+        for d in "$root"/*/; do
+            [ -f "${d}tool.yaml" ] || continue
+            ln -sfn "${root}/$(basename "$d")" "$cli_dir/$(basename "$d")" && n=$((n+1))
+        done
+        IFS=:
+    done
+    IFS=$OLDIFS
+    echo "[stage2] linked $n tool-skill(s) into $cli_dir for claude CLI discovery"
+' || echo "[stage2] Warning: tool-skill CLI link step failed; continuing"
+
 # --- Discover agent-browser's Chromium binary ---
 # The image's Dockerfile runs `npx playwright install chromium`, which
 # populates ``$PLAYWRIGHT_BROWSERS_PATH`` (=/opt/hermes/.playwright) with

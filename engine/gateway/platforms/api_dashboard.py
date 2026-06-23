@@ -23,8 +23,10 @@ import json
 import logging
 import math
 import os
+import re
 import time
 import uuid
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -143,6 +145,74 @@ _APPROVAL_CHOICES = ["once", "session", "always", "deny"]
 # --model via the per-request _model_override hook.
 _TOOL_BUILDER_MODEL = "claude-opus-4-8"
 
+
+def _builder_model() -> str:
+    """Tier-2 model for the Labs builder, honoring persisted routing.
+
+    The Labs tool builder/refine runs on the Tier-2 surface (Brainstorming, Tools
+    & Workspace). Reads the Control → Models persisted Tier-2 routing, falling back
+    to the Opus default when nothing is saved or the store is unavailable (fully
+    best-effort — never raises).
+    """
+    try:
+        from gateway.platforms import model_config_store
+
+        return model_config_store.resolve_tier_model("t2", default=_TOOL_BUILDER_MODEL) or _TOOL_BUILDER_MODEL
+    except Exception:
+        return _TOOL_BUILDER_MODEL
+
+
+# Static model catalog for Control → Models (mirrors dashboard/src/lib/control.ts
+# MODELS). Ids are bare-dashed CLI form so the persisted routing maps straight to
+# the claude_code --model flag. The persisted roster (enabled flags) and routing
+# (tier→id) are merged on top of this by GET /v1/model-config.
+_MODEL_CATALOG: List[Dict[str, Any]] = [
+    {"id": "claude-sonnet-4-6", "name": "Sonnet 4.6", "tier": "Balanced", "context": "200K", "cost": "$3 / $15", "role": "Fast, capable all-rounder", "enabled": True, "color": "#4f8cff"},
+    {"id": "claude-opus-4-8", "name": "Opus 4.8", "tier": "Reasoning", "context": "200K", "cost": "$15 / $75", "role": "Deepest reasoning for heavy creative & coding work", "enabled": True, "color": "#a78bfa"},
+]
+
+# 2-tier routing descriptors, keyed by surface (mirrors control.ts ROUTING).
+# ``id`` is the store's tier key; ``default`` is the catalog model id pre-selected
+# when nothing is saved (Tier 1 → Sonnet, Tier 2 → Opus).
+_ROUTING_TIERS: List[Dict[str, Any]] = [
+    {"id": "t1", "tier": "Tier 1 · Voice & Planner", "desc": "Home voice agent and the planner", "default": "claude-sonnet-4-6"},
+    {"id": "t2", "tier": "Tier 2 · Brainstorm, Tools & Workspace", "desc": "Brainstorming, Labs tools, and the workspace", "default": "claude-opus-4-8"},
+]
+
+
+def _build_services() -> List[Dict[str, str]]:
+    """System-health rows for Control → Overview (mirrors control.ts SERVICES).
+
+    Derives a few real signals best-effort; falls back to sensible static values
+    so the panel always renders. Never raises.
+    """
+    engine_detail = "running"
+    try:
+        from gateway.status import read_runtime_status
+
+        rt = read_runtime_status() or {}
+        state = rt.get("gateway_state")
+        if state:
+            engine_detail = str(state)
+    except Exception:
+        logger.debug("read_runtime_status unavailable for /v1/usage services", exc_info=True)
+
+    vault_path = os.path.expanduser(os.environ.get("HERMES_VAULT_PATH", "~/Documents/Obsidian/Vault"))
+    vault_ok = False
+    try:
+        vault_ok = os.path.isdir(vault_path)
+    except Exception:
+        vault_ok = False
+
+    cron_on = os.environ.get("HERMES_BUDGET_GOVERNOR") == "1" or os.environ.get("HERMES_TRUST_GATE") == "1"
+
+    return [
+        {"name": "Hermes engine", "status": "healthy", "detail": engine_detail},
+        {"name": "Claude bridge", "status": "healthy", "detail": "connected"},
+        {"name": "Obsidian vault", "status": "healthy" if vault_ok else "off", "detail": "synced" if vault_ok else "path not found"},
+        {"name": "Cron scheduler", "status": "healthy" if cron_on else "off", "detail": "armed" if cron_on else "autonomy disabled"},
+    ]
+
 # Persona for the deterministic-scaffold ENRICH agent (build endpoint). It is
 # fed the draft + the on-disk scaffold paths and told to enrich, not re-ask.
 _TOOL_BUILDER_ENRICH_PERSONA = (
@@ -191,7 +261,416 @@ def _manifest_to_dict(m: Any) -> dict:
         ],
         **({"description": m.description} if m.description else {}),
         "inputs": list(m.inputs or []),
+        # Swarm flag drives the dashboard run-screen choice (glass-box swarm UI
+        # vs the legacy single-agent workbench).
+        "swarm": bool(getattr(m, "swarm", False)),
+        **({"steering": m.steering} if getattr(m, "steering", None) else {}),
     }
+
+
+# ---------------------------------------------------------------------------
+# Run registry (live Workbench) — run_id → launch context so the resume-message
+# and artifacts endpoints can resolve a run after launch. A small module-level
+# dict suffices: no richer registry exists, and concurrent runs each get a
+# distinct run_id key. ``claude_session_id`` is filled in when the run's first
+# turn completes (captured from the agent result) so a /message follow-up can
+# --resume that exact Claude Code conversation.
+# ---------------------------------------------------------------------------
+
+_RUN_REGISTRY: Dict[str, Dict[str, Any]] = {}
+
+# The in-memory dict above is the hot-path source of truth, but it is wiped on
+# every engine restart/rebuild.  ``labs_store`` mirrors the durable subset of
+# each record to SQLite on the ``/opt/data`` volume so the resume/artifacts
+# endpoints keep resolving runs after a restart.  We hydrate the dict from the
+# DB ONCE, lazily, on first registry access (``_run_registry()``), so module
+# import never touches the filesystem.  All durability is best-effort: a DB
+# failure logs and continues — it must never break the live request path.
+_RUN_REGISTRY_HYDRATED = False
+
+
+def _run_registry() -> Dict[str, Dict[str, Any]]:
+    """Return the run registry, hydrating it from the durable store once.
+
+    On first call: create the SQLite table and load every persisted run into the
+    in-memory dict (without clobbering any record already added this process —
+    a live record always wins over its restart-loaded copy).
+    """
+    global _RUN_REGISTRY_HYDRATED
+    if not _RUN_REGISTRY_HYDRATED:
+        _RUN_REGISTRY_HYDRATED = True
+        try:
+            from gateway.platforms import labs_store
+
+            labs_store.init_db()
+            for rec in labs_store.load_all():
+                rid = rec.get("run_id")
+                if rid and rid not in _RUN_REGISTRY:
+                    _RUN_REGISTRY[rid] = rec
+        except Exception as exc:  # never let hydration break a request
+            logger.warning("run registry hydration failed: %s", exc)
+    return _RUN_REGISTRY
+
+
+def _persist_run(run_id: str, record: Dict[str, Any]) -> None:
+    """Upsert a run record to the durable store (best-effort, never raises)."""
+    try:
+        from gateway.platforms import labs_store
+
+        labs_store.persist_run(run_id, record)
+    except Exception as exc:
+        logger.warning("run persist failed for %s: %s", run_id, exc)
+
+# Injected (per turn, via --append-system-prompt) on tool-launch + /message runs so
+# a multi-stage skill (e.g. Brand Maker / Forge) executes exactly ONE stage per turn
+# and halts for review — the contract the step-gated Workbench depends on. Without
+# it the agent runs the whole pipeline in a single turn and the per-stage approval
+# gate is meaningless. Harmless for single-step tools (their one request IS the stage).
+_STEP_GATE_SYSTEM_PROMPT = (
+    "You are running inside a STEP-GATED Workbench that advances ONE stage at a time. "
+    "Execute ONLY the single stage or step the current user message asks for — nothing "
+    "beyond it. "
+    "You MUST persist this stage's deliverable to disk: actually call the Write tool to "
+    "save the stage's artifact file(s) into the brand/output folder BEFORE you end your "
+    "turn. Describing, analysing, or narrating the stage in your reply is NOT sufficient — "
+    "if you end a turn without having written the artifact file, the stage is lost. Write "
+    "the file first, then end your turn. "
+    "Do NOT begin, preview, draft, or run any later stage in the same turn, even if you "
+    "already know what comes next and even if it seems efficient. The moment the current "
+    "stage's artifact is written, STOP and end your turn so the user can review and "
+    "approve. The user will send an explicit approval before you continue to the next stage."
+)
+
+# Image / video extensions recognised for the artifacts ``kind`` classifier.
+_ARTIFACT_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".svg", ".gif"}
+_ARTIFACT_VIDEO_EXTS = {".mp4", ".mov", ".webm", ".m4v", ".avi"}
+
+
+def _kebab(text: str) -> str:
+    """Kebab-case a brand name: lowercase, spaces/punct → hyphens, collapse
+    repeats, trim leading/trailing hyphens. Mirrors the brand-identifier rule
+    the Brand Maker uses for its 30_Resources/Brands/{brand} artifacts dir.
+    """
+    s = (text or "").strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "-", s)
+    s = re.sub(r"-{2,}", "-", s)
+    return s.strip("-")
+
+
+def _titleize(kebab: str) -> str:
+    """Title-case a kebab brand id for display: "acme-co" → "Acme Co",
+    "brackish" → "Brackish". The inverse-ish of _kebab for UI labels.
+    """
+    parts = [p for p in (kebab or "").split("-") if p]
+    return " ".join(p[:1].upper() + p[1:] for p in parts)
+
+
+def _brands_root() -> Path:
+    """Resolve the Brands artifacts root: ``${HERMES_VAULT_PATH}/30_Resources/Brands``.
+
+    Defaults to ``/vault`` in-container (matches the compose rw mount).
+    """
+    vault = os.environ.get("HERMES_VAULT_PATH", "/vault")
+    return Path(os.path.expanduser(vault)) / "30_Resources" / "Brands"
+
+
+def _artifact_kind(name: str) -> str:
+    """Classify an artifact file by extension → html|markdown|image|video|other."""
+    ext = Path(name).suffix.lower()
+    if ext == ".html":
+        return "html"
+    if ext == ".md":
+        return "markdown"
+    if ext in _ARTIFACT_IMAGE_EXTS:
+        return "image"
+    if ext in _ARTIFACT_VIDEO_EXTS:
+        return "video"
+    return "other"
+
+
+def _artifact_content_type(name: str) -> str:
+    """Map an artifact file extension to a Content-Type for raw streaming."""
+    ext = Path(name).suffix.lower()
+    return {
+        ".html": "text/html; charset=utf-8",
+        ".md": "text/markdown; charset=utf-8",
+        ".json": "application/json; charset=utf-8",
+        ".png": "image/png",
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".webp": "image/webp",
+        ".svg": "image/svg+xml",
+        ".gif": "image/gif",
+    }.get(ext, "application/octet-stream")
+
+
+# Per-run MCP servers registered for swarm tools (e.g. the brainstorm PM). Lets
+# the orchestrating agent reach Ruflo's coordination tools (swarm_init, memory_*)
+# on top of the always-on hermes-tools server. Override the launch command via
+# RUFLO_MCP_COMMAND / RUFLO_MCP_ARGS.
+def _swarm_mcp_servers() -> Dict[str, Any]:
+    import shlex
+    command = os.environ.get("RUFLO_MCP_COMMAND", "npx")
+    args = shlex.split(os.environ.get("RUFLO_MCP_ARGS", "-y ruflo@latest mcp start"))
+    return {"claude-flow": {"command": command, "args": args}}
+
+
+# The 21st.dev "magic" MCP (UI component generation / inspiration / logo search)
+# for the frontend + UX agents. Env-gated: registered ONLY when configured
+# (MAGIC_MCP_COMMAND or an API key). When absent, runs degrade gracefully to the
+# ui-ux-pro-max / frontend-design skills + WebSearch — never a failure.
+def _magic_mcp_servers() -> Dict[str, Any]:
+    import shlex
+    command = os.environ.get("MAGIC_MCP_COMMAND")
+    api_key = os.environ.get("MAGIC_MCP_API_KEY") or os.environ.get("TWENTYFIRST_API_KEY")
+    if not command and not api_key:
+        return {}
+    server: Dict[str, Any] = {
+        "command": command or "npx",
+        "args": shlex.split(os.environ.get("MAGIC_MCP_ARGS", "-y @21st-dev/magic@latest")),
+    }
+    if api_key:
+        server["env"] = {"API_KEY": api_key, "TWENTYFIRST_API_KEY": api_key}
+    return {"magic": server}
+
+
+_SWARM_MCP_SERVERS: Dict[str, Any] = _swarm_mcp_servers()
+_MAGIC_MCP_SERVERS: Dict[str, Any] = _magic_mcp_servers()
+
+
+def _manifest_for(tool_id: str) -> Optional[Any]:
+    """Resolve a single ToolManifest by id (best-effort, None on any failure)."""
+    try:
+        from tools.tool_manifest import discover_manifests
+        for m in discover_manifests():
+            if getattr(m, "tool", None) == tool_id:
+                return m
+    except Exception:
+        logger.debug("manifest lookup failed for %s", tool_id, exc_info=True)
+    return None
+
+
+def _expand_env_template(tmpl: str) -> str:
+    """Expand ``${VAR}`` / ``${VAR:-default}`` shell-style refs against the engine
+    environment. Mirrors how the launched agent's shell would resolve them, so the
+    engine and the agent agree on the same absolute path."""
+    def repl(m: "re.Match[str]") -> str:
+        var, default = m.group(1), m.group(2)
+        return os.environ.get(var, default if default is not None else "")
+    return re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}", repl, tmpl)
+
+
+def _root_from_manifest(manifest: Optional[Any]) -> Optional[Path]:
+    """Resolve a tool's artifacts base dir from its ``artifacts_root`` template:
+    expand env refs, then strip the trailing ``{placeholder}/`` so callers append
+    the per-session slug. Returns None when the manifest has no template."""
+    tmpl = getattr(manifest, "artifacts_root", None) if manifest else None
+    if not tmpl:
+        return None
+    expanded = _expand_env_template(tmpl)
+    base = re.sub(r"/\{[^}]+\}/?$", "", expanded).rstrip("/")
+    return Path(os.path.expanduser(base)) if base else None
+
+
+def _collection_root_for(tool_id: str) -> Path:
+    """The artifacts base dir for a tool, taken from its manifest ``artifacts_root``
+    (so each tool writes to its own — possibly writable, non-vault — location).
+    Falls back to the vault Brands root when the manifest has no template."""
+    root = _root_from_manifest(_manifest_for(tool_id))
+    return root if root is not None else _brands_root()
+
+
+def _artifacts_dir_for(tool_id: str, record: Dict[str, Any]) -> Optional[Path]:
+    """Resolve the on-disk artifacts dir for a run, honouring the tool's
+    ``artifacts_root`` collection (``Brands`` vs ``Brainstorms`` …). Mirrors
+    ``_brands_root()`` env handling so the Brand Maker path is unchanged."""
+    slug = _kebab(record.get("brand") or "")
+    if not slug:
+        return None
+    return _collection_root_for(tool_id) / slug
+
+
+def _workspaces_root() -> Path:
+    """Workspaces root that promoted brainstorm folders are copied into. Defaults
+    to the rw data mount (``/opt/data/workspaces``) since the vault is read-only
+    in-container; override with ``HERMES_WORKSPACES_PATH``."""
+    override = os.environ.get("HERMES_WORKSPACES_PATH")
+    if override:
+        return Path(os.path.expanduser(override))
+    return Path(os.path.expanduser(os.environ.get("HERMES_DATA_PATH", "/opt/data"))) / "workspaces"
+
+
+# Marker file written into every pipeline-created workspace. The workspaces root
+# (10_Projects) also holds the user's own projects, so the list endpoint only
+# surfaces folders carrying this marker — and reads its metadata instead of
+# recursively walking the (potentially huge) project tree.
+_WORKSPACE_MARKER = ".agent-home-conf"
+
+# Running build/run/test scripts, keyed "{slug}:{script}". The process is started
+# in its own session so we can kill the whole tree (a dev server + children).
+_WORKSPACE_EXEC_PROCS: Dict[str, Any] = {}
+# Only these three scripts are runnable from the dashboard — never arbitrary commands.
+_WORKSPACE_SCRIPTS = ("build", "run", "test")
+
+# Folders hidden from the "local folder" picker (noise / heavy build output).
+_BROWSE_SKIP = {
+    "node_modules", "dist", "build", ".venv", "__pycache__", ".next",
+    ".swarm", ".claude-flow", "venv", "target",
+}
+
+
+def _browse_root() -> Path:
+    """Root the local-folder picker may browse. Defaults to the mounted vault (the
+    parent of the workspaces root), so any picked folder is engine-readable. Override
+    with HERMES_BROWSE_ROOT."""
+    env = os.environ.get("HERMES_BROWSE_ROOT")
+    if env:
+        return Path(env)
+    return _collection_root_for("workspace").parent
+
+
+def _kill_proc_group(proc: Any) -> None:
+    """Best-effort terminate a script's whole process group (SIGTERM)."""
+    import os
+    import signal
+    if proc is None or proc.returncode is not None:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        try:
+            proc.terminate()
+        except ProcessLookupError:
+            pass
+
+
+def _write_workspace_marker(dest: Path, meta: Dict[str, Any]) -> None:
+    """Stamp a workspace folder so the list endpoint recognises (and cheaply
+    describes) it without scanning the tree."""
+    try:
+        (dest / _WORKSPACE_MARKER).write_text(
+            json.dumps({**meta, "agent_home": True}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except OSError:
+        logger.warning("could not write workspace marker for %s", dest, exc_info=True)
+
+
+def _ingest_workspace(source_type: str, source_ref: str, dest: Path) -> None:
+    """Materialize a workspace at *dest* from one of three sources (blocking; call
+    via run_in_executor). Never overwrites a non-empty existing workspace."""
+    import shutil
+    import subprocess
+    if dest.exists() and any(dest.iterdir()):
+        raise ValueError(f"workspace already exists and is non-empty: {dest}")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    if source_type == "github":
+        url = (source_ref or "").strip()
+        if not (url.startswith("https://") or url.startswith("http://") or url.startswith("git@")):
+            raise ValueError("github source must be an http(s):// or git@ URL")
+        git = os.environ.get("GIT_BIN", "git")
+        proc = subprocess.run(
+            [git, "clone", "--depth", "1", url, str(dest)],
+            capture_output=True, text=True, timeout=600,
+        )
+        if proc.returncode != 0:
+            raise ValueError(f"git clone failed: {proc.stderr.strip()[:300]}")
+        return
+
+    if source_type == "folder":
+        src = Path(os.path.expanduser((source_ref or "").strip()))
+        if not src.is_dir():
+            raise ValueError(f"folder source not found: {src}")
+        # Skip heavy/VCS dirs so the copy is fast and clean.
+        ignore = shutil.ignore_patterns(".git", "node_modules", "dist", "build", ".venv", "__pycache__")
+        shutil.copytree(src, dest, dirs_exist_ok=True, ignore=ignore)
+        return
+
+    if source_type == "brainstorm":
+        src = _collection_root_for("brainstorm") / _kebab(source_ref or "")
+        if not src.is_dir():
+            raise ValueError(f"brainstorm session not found: {source_ref!r}")
+        # Seed the workspace with the PRD/docs only — skip the brainstorm's own
+        # state files (qna/readiness/steering/ruflo) so the workspace provisions
+        # fresh with the refined PRD as its spec.
+        ignore = shutil.ignore_patterns(
+            "qna.json", "readiness.json", "CLAUDE.md", ".swarm-provisioned",
+            ".claude-flow", ".swarm",
+        )
+        shutil.copytree(src, dest, dirs_exist_ok=True, ignore=ignore)
+        return
+
+    raise ValueError(f"unknown source_type: {source_type!r}")
+
+
+def _kick_ruflo_init(folder: Path) -> None:
+    """Fire `ruflo init` inside *folder* in the background (best-effort). Never
+    blocks the launch or the agent's first turn; failures are logged at debug.
+    Disable with ``HERMES_DISABLE_RUFLO_INIT=1``; override cmd via ``RUFLO_INIT_CMD``."""
+    if os.environ.get("HERMES_DISABLE_RUFLO_INIT") == "1":
+        return
+    import shlex
+    cmd = shlex.split(os.environ.get("RUFLO_INIT_CMD", "npx -y ruflo@latest init"))
+
+    async def _run() -> None:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd, cwd=str(folder),
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await asyncio.wait_for(proc.wait(), timeout=180)
+        except Exception:
+            logger.debug("ruflo init best-effort failed in %s", folder, exc_info=True)
+
+    try:
+        asyncio.get_running_loop().create_task(_run())
+    except RuntimeError:
+        logger.debug("ruflo init skipped: no running loop")
+
+
+def _provision_swarm_session(manifest: Any, slug: str, project: str, brief: str) -> Optional[Path]:
+    """Provision a swarm tool's session folder before the agent's first turn:
+    create the dir on the (writable) artifacts root, write the steering
+    ``CLAUDE.md`` from the skill's template, and kick `ruflo init`. Idempotent via
+    a sentinel so relaunch/restart is cheap. Returns the folder (or None on mkdir
+    failure)."""
+    root = _root_from_manifest(manifest) or _brands_root()
+    folder = root / slug
+    sentinel = folder / ".swarm-provisioned"
+    if sentinel.exists():
+        return folder  # already set up — keep relaunch/restart cheap
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        logger.warning("swarm provision: mkdir failed for %s", folder, exc_info=True)
+        return None
+
+    steering = getattr(manifest, "steering", None)
+    source_path = getattr(manifest, "source_path", None)
+    # Never clobber a project's existing CLAUDE.md (workspaces ingested from a
+    # folder/repo may already have one — the agent updates it during provisioning).
+    if steering and source_path and not (folder / "CLAUDE.md").exists():
+        tmpl_path = Path(source_path).parent / "assets" / steering
+        try:
+            tmpl = tmpl_path.read_text(encoding="utf-8")
+            doc = (
+                tmpl.replace("{{PROJECT}}", project or slug)
+                    .replace("{{SLUG}}", slug)
+                    .replace("{{FOLDER}}", str(folder))
+                    .replace("{{BRIEF}}", brief or "_(none provided)_")
+            )
+            (folder / "CLAUDE.md").write_text(doc, encoding="utf-8")
+        except OSError:
+            logger.warning("swarm provision: steering write failed for %s", folder, exc_info=True)
+
+    _kick_ruflo_init(folder)
+    try:
+        sentinel.write_text("ok\n", encoding="utf-8")
+    except OSError:
+        pass
+    return folder
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +686,10 @@ def _start_run(
     goal_manager: Optional[Any] = None,
     model_override: Optional[str] = None,
     append_system_prompt: Optional[str] = None,
+    resume_claude_session_id: Optional[str] = None,
+    run_record: Optional[Dict[str, Any]] = None,
+    swarm: bool = False,
+    run_cwd: Optional[str] = None,
 ) -> None:
     """Register a new run on *adapter* and fire the background asyncio task.
 
@@ -279,14 +762,29 @@ def _start_run(
         try:
             adapter._set_run_status(run_id, "running")
             event_cb, on_event_cb = adapter._make_run_event_callback(run_id, loop)
+            # Labs, Brainstorm and Workspace runs are the Tier-2 surface.
             agent = adapter._create_agent(
                 session_id=session_id,
                 stream_delta_callback=_text_cb,
                 tool_progress_callback=event_cb,
                 ephemeral_system_prompt=append_system_prompt,
+                tier="t2",
             )
             adapter._active_run_agents[run_id] = agent
             agent.run_event_callback = on_event_cb
+            # Resume an existing Claude Code conversation (live Workbench /message):
+            # pre-create the lazy ClaudeCodeSession and seed its session_id so the
+            # next turn runs `claude --resume <id>`, continuing Forge's session.
+            if resume_claude_session_id:
+                try:
+                    from agent.claude_code_runtime import ClaudeCodeSession
+                    cwd = getattr(agent, "session_cwd", None) or os.getcwd()
+                    sess = ClaudeCodeSession(cwd=cwd)
+                    sess.session_id = resume_claude_session_id
+                    agent._claude_session = sess
+                except Exception:
+                    logger.debug("[api_dashboard] resume seed failed for %s",
+                                 run_id, exc_info=True)
             # Per-request claude_code hooks (Labs builder/refine): a persona via
             # --append-system-prompt and Opus 4.8 via --model. Both default to
             # None elsewhere → unchanged behaviour for normal tool launches.
@@ -294,6 +792,52 @@ def _start_run(
                 agent._append_system_prompt = append_system_prompt
             if model_override:
                 agent._model_override = model_override
+
+            # Filesystem latitude for tool-launch runs (Labs). The launched skill
+            # (e.g. Brand Maker / Forge) must read its references (/opt/skills, via
+            # the /opt/data/.claude/skills symlinks), the user's uploaded docs
+            # (/opt/data/uploads), and write artifacts to the vault Brands mount
+            # (HERMES_VAULT_PATH, rw). These live outside the CLI cwd, so without
+            # --add-dir + a widened allow-list every Read/Bash/Write is blocked by a
+            # headless permission prompt. The fast voice/chat path goes through the
+            # api_server chat route (NOT _start_run), so it stays locked to the
+            # curated mcp__hermes-tools allow-list — unchanged here.
+            agent._extra_dirs = [
+                d for d in (
+                    "/opt/skills",
+                    "/opt/data",
+                    os.environ.get("HERMES_VAULT_PATH", "/vault"),
+                ) if d and os.path.isdir(d)
+            ]
+            agent._allowed_tools_override = os.environ.get(
+                "CLAUDE_TOOL_LAUNCH_ALLOWED_TOOLS",
+                "mcp__hermes-tools Read Glob Grep Edit Write Bash "
+                "WebFetch WebSearch TodoWrite",
+            )
+
+            # Swarm tools (e.g. the brainstorm PM) orchestrate a sub-agent fleet:
+            # widen the allow-list with the native Task tool + the claude-flow
+            # (Ruflo) MCP, and register that MCP server for this run only. The
+            # default tool/chat path is untouched (swarm defaults False).
+            if swarm:
+                default_allowed = agent._allowed_tools_override + " Agent Task mcp__claude-flow"
+                extra_servers = dict(_SWARM_MCP_SERVERS)
+                # 21st.dev magic MCP for the frontend/UX agents, when configured.
+                if _MAGIC_MCP_SERVERS:
+                    extra_servers.update(_MAGIC_MCP_SERVERS)
+                    default_allowed += " mcp__magic"
+                agent._allowed_tools_override = os.environ.get(
+                    "CLAUDE_TOOL_LAUNCH_SWARM_ALLOWED_TOOLS", default_allowed,
+                )
+                agent._extra_mcp_servers = extra_servers
+                # Tail each spawned specialist's transcript so its live thinking/
+                # text/tools surface in the dashboard (the CLI doesn't stream
+                # sub-agent internals to the parent process).
+                agent._subagent_tail = True
+
+            # Workspace runs operate on the project folder (BMAD skills, git, builds).
+            if run_cwd:
+                agent._run_cwd = run_cwd
 
             def _approval_notify(approval_data: Dict[str, Any]) -> None:
                 event = dict(approval_data or {})
@@ -440,6 +984,21 @@ def _start_run(
                 if isinstance(result, tuple) and len(result) == 2:
                     result, usage = result
 
+                # Persist the Claude Code session id so a /message follow-up can
+                # --resume this exact conversation (live Workbench).
+                if run_record is not None:
+                    # Terminal: mark the run complete so the latest-run lookup
+                    # can report it (both success and agent-reported failure).
+                    run_record["completed"] = True
+                    if isinstance(result, dict):
+                        csid = result.get("claude_session_id")
+                        if csid:
+                            run_record["claude_session_id"] = csid
+                    # Durable terminal: persist completed + claude_session_id so a
+                    # post-restart /message can --resume this exact conversation
+                    # and runs/latest reports it as finished.
+                    _persist_run(run_id, run_record)
+
                 if isinstance(result, dict) and result.get("failed"):
                     error_msg = result.get("error") or "agent run failed"
                     q.put_nowait({
@@ -496,6 +1055,22 @@ def _start_run(
                 unregister_gateway_notify(approval_session_key)
             except Exception:
                 pass
+            # Turn settled (success, failure, cancel, or error): clear the
+            # concurrency guard so the next /message can resume the session.
+            if run_record is not None:
+                run_record["busy"] = False
+                # Capture the adapter's canonical terminal status (completed /
+                # failed / cancelled) so the persisted record + liveness endpoint
+                # report it accurately after a restart.
+                try:
+                    st = adapter._run_statuses.get(run_id) or {}
+                    if st.get("status"):
+                        run_record["status"] = st["status"]
+                except Exception:
+                    pass
+                # Persist the settled state (busy is in-memory only, but this
+                # also captures status + claude_session_id set this turn).
+                _persist_run(run_id, run_record)
             # Sentinel: signal SSE stream to close.
             try:
                 q.put_nowait(None)
@@ -516,6 +1091,70 @@ def _start_run(
             task.add_done_callback(adapter._background_tasks.discard)
         except AttributeError:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Helpers: tool-input file uploads (POST /v1/tools/{tool_id}/upload)
+# ---------------------------------------------------------------------------
+
+# Per-file cap and the field-id charset allowlist. Files land under the
+# writable data root only (``/opt/data/uploads`` == host ``~/.hermes/uploads``);
+# ``/vault`` and ``/opt/skills`` are read-only and are never written here.
+_UPLOAD_MAX_BYTES = 25 * 1024 * 1024  # 25 MB per file
+_UPLOAD_FIELD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+# Brand-asset uploads land in the rw /vault Brands mount and may include video,
+# so they get a larger per-file cap than the data-root tool uploads above.
+_BRAND_ASSET_MAX_BYTES = 200 * 1024 * 1024  # 200 MB per file
+
+
+def _uploads_root() -> Path:
+    """Resolve the writable uploads root: ``/opt/data/uploads`` in-container.
+
+    Derives the read-WRITE data root from ``HERMES_TOOL_ROOTS`` (canonical
+    deployment ``/opt/skills:/opt/data/skills``) — the writable skills root's
+    parent is the ``~/.hermes`` mount (``/opt/data``).  Mirrors
+    ``tool_builder._writable_root``'s env-driven selection so we never write to
+    the read-only ``/opt/skills`` or ``/vault`` mounts.  Falls back to
+    ``~/.hermes`` (local/dev) when the env is unset.
+    """
+    env = os.environ.get("HERMES_TOOL_ROOTS", "").strip()
+    if env:
+        roots = [p for p in env.split(os.pathsep) if p.strip()]
+        for raw in reversed(roots):
+            candidate = Path(raw).expanduser()
+            try:
+                candidate.mkdir(parents=True, exist_ok=True)
+                if os.access(candidate, os.W_OK):
+                    # ``.../skills`` → data root is its parent.
+                    return candidate.parent / "uploads"
+            except OSError:
+                continue
+    try:
+        from hermes_constants import get_hermes_home
+        data_root = get_hermes_home()
+    except Exception:
+        data_root = Path(os.path.expanduser("~/.hermes"))
+    return data_root / "uploads"
+
+
+def _sanitize_upload_filename(name: Optional[str]) -> Optional[str]:
+    """Reduce an uploaded part's filename to a safe basename.
+
+    Strips any directory components (path-separator agnostic), rejects traversal
+    and hidden/empty names, and allowlists a conservative charset.  Returns the
+    safe basename, or ``None`` when no usable name can be produced (caller 4xx).
+    """
+    if not isinstance(name, str):
+        return None
+    # Basename only — drop everything up to the last '/' or '\\'.
+    base = re.split(r"[\\/]", name)[-1].strip()
+    if not base or base in {".", ".."} or ".." in base:
+        return None
+    # Collapse disallowed characters to '_'; keep word chars, dot, dash, space.
+    base = re.sub(r"[^A-Za-z0-9._ -]+", "_", base).strip(" .")
+    if not base or base in {".", ".."}:
+        return None
+    return base[:128]
 
 
 # ---------------------------------------------------------------------------
@@ -825,6 +1464,130 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
         return web.json_response({"approvals": out})
 
     # ------------------------------------------------------------------
+    # GET /v1/usage — aggregated usage for Control → Overview.
+    # Rolls the state.db ``sessions`` table up into the control.ts shapes
+    # (UsageStat[] / spend series / ModelUsage[]) + live system health.
+    # Best-effort: on any failure returns 200 with zeroed/static data so the
+    # dashboard keeps its mock fallback rather than erroring.
+    # ------------------------------------------------------------------
+    async def _usage(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            from gateway.platforms import usage_aggregate
+
+            db = adapter._ensure_session_db()
+            active = len(getattr(adapter, "_active_run_agents", {}) or {})
+            view = usage_aggregate.build_usage_view(db, days=14, active_agents=active)
+            view["services"] = _build_services()
+            return web.json_response(view)
+        except Exception as exc:
+            logger.exception("/v1/usage failed")
+            return web.json_response({"error": str(exc)})
+
+    # ------------------------------------------------------------------
+    # GET /v1/model-config — static catalog merged with persisted roster/routing.
+    # PUT /v1/model-config — persist {roster, routing} for Control → Models.
+    # ------------------------------------------------------------------
+    async def _model_config_get(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            from gateway.platforms import model_config_store
+
+            model_config_store.init_db()
+            cfg = model_config_store.get_config()
+        except Exception as exc:
+            logger.exception("/v1/model-config GET failed")
+            cfg = {"roster": {}, "routing": {}}
+            return web.json_response(
+                {"models": _MODEL_CATALOG, "tiers": _ROUTING_TIERS, **cfg, "error": str(exc)}
+            )
+        return web.json_response({"models": _MODEL_CATALOG, "tiers": _ROUTING_TIERS, **cfg})
+
+    async def _model_config_put(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response(
+                {"error": "invalid_json", "detail": "request body must be JSON"}, status=400
+            )
+        if not isinstance(body, dict):
+            return web.json_response(
+                {"error": "invalid_body", "detail": "body must be a JSON object"}, status=400
+            )
+
+        valid_ids = {m["id"] for m in _MODEL_CATALOG}
+        roster = body.get("roster")
+        routing = body.get("routing")
+
+        clean_roster = None
+        if isinstance(roster, dict):
+            clean_roster = {str(k): bool(v) for k, v in roster.items() if str(k) in valid_ids}
+
+        clean_routing = None
+        if isinstance(routing, dict):
+            clean_routing = {}
+            for tier, mid in routing.items():
+                if tier in {"t1", "t2"} and isinstance(mid, str) and mid in valid_ids:
+                    clean_routing[tier] = mid
+
+        try:
+            from gateway.platforms import model_config_store
+
+            model_config_store.init_db()
+            model_config_store.put_config(roster=clean_roster, routing=clean_routing)
+            cfg = model_config_store.get_config()
+        except Exception as exc:
+            logger.exception("/v1/model-config PUT failed")
+            return web.json_response({"error": str(exc)}, status=500)
+        return web.json_response({"saved": True, **cfg})
+
+    # ------------------------------------------------------------------
+    # GET /v1/integrations/jira/items — live Jira issues for the Planner.
+    # Returns {items: JiraItem[], configured: bool}. Best-effort: when Jira
+    # isn't configured (or the fetch fails) returns an empty list + the flag so
+    # the Planner panel falls back to its mock data without erroring.
+    # ------------------------------------------------------------------
+    async def _jira_items(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            from gateway.platforms import jira_client
+
+            if not jira_client.is_configured():
+                return web.json_response({"items": [], "configured": False})
+            loop = asyncio.get_running_loop()
+            items = await loop.run_in_executor(None, jira_client.fetch_issues)
+            return web.json_response({"items": items, "configured": True})
+        except Exception as exc:
+            logger.exception("/v1/integrations/jira/items failed")
+            return web.json_response({"items": [], "configured": False, "error": str(exc)})
+
+    # ------------------------------------------------------------------
+    # GET /v1/integrations/gmail/messages — recent inbox mail for the Planner.
+    # Returns {messages: MailItem[], configured: bool}. Best-effort: when Gmail
+    # OAuth isn't set up (or the fetch fails) returns an empty list + the flag so
+    # the Planner mail panel falls back to its mock data without erroring.
+    # ------------------------------------------------------------------
+    async def _gmail_messages(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            from gateway.platforms import gmail_client
+
+            if not gmail_client.is_configured():
+                return web.json_response({"messages": [], "configured": False})
+            loop = asyncio.get_running_loop()
+            messages = await loop.run_in_executor(None, gmail_client.fetch_messages)
+            return web.json_response({"messages": messages, "configured": True})
+        except Exception as exc:
+            logger.exception("/v1/integrations/gmail/messages failed")
+            return web.json_response({"messages": [], "configured": False, "error": str(exc)})
+
+    # ------------------------------------------------------------------
     # POST /v1/tools/{tool_id}/launch — start a run bound to a tool's skill
     # for the Workbench (Wave 3 / B2). Loads the manifest by id via
     # discover_manifests(), builds a skill-invocation prompt from the
@@ -865,17 +1628,25 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
             )
 
         # Parse optional inputs body — accept missing / non-JSON body gracefully.
+        # An optional top-level "seed" string lets the dashboard resume an
+        # existing project (e.g. tell the skill which stages are done + to read
+        # existing artifacts and continue). Truncated defensively.
         inputs: Dict[str, Any] = {}
+        seed = ""
         try:
             body = await request.json()
             if isinstance(body, dict):
                 raw_inputs = body.get("inputs")
                 if isinstance(raw_inputs, dict):
                     inputs = raw_inputs
+                raw_seed = body.get("seed")
+                if isinstance(raw_seed, str):
+                    seed = raw_seed.strip()[:4000]
         except Exception:
             pass  # empty or non-JSON body → inputs stays {}
 
-        # Build user_message: invoke the skill, passing inputs as context.
+        # Build user_message: invoke the skill, passing inputs as context, then
+        # the optional resume seed AFTER the Inputs line. No seed → unchanged.
         skill = manifest.skill
         if inputs:
             try:
@@ -885,19 +1656,555 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
             user_message = f"/{skill}\n\nInputs: {inputs_text}"
         else:
             user_message = f"/{skill}"
+        if seed:
+            user_message = f"{user_message}\n\n{seed}"
 
         run_id = f"run_{uuid.uuid4().hex}"
         # Per-tool session: tools share continuity within a session key based on
         # the tool slug so successive launches of the same tool resume context.
         session_id = f"tool-{tool_id}-{uuid.uuid4().hex[:8]}"
 
-        _start_run(adapter, run_id, user_message, session_id)
+        # Register the run so the live-Workbench resume + artifacts endpoints can
+        # resolve it. ``brand`` (when supplied as an input) seeds the artifacts
+        # dir; ``claude_session_id`` is filled in by _start_run on completion.
+        # The primary slug input: ``brand`` for Brand Maker, ``project`` for the
+        # brainstorm swarm. Stored under ``brand`` so the whole durable/artifacts/
+        # latest-run plumbing resolves it uniformly.
+        slug_value = inputs.get("brand") or inputs.get("project")
+        brand = slug_value if isinstance(slug_value, str) else ""
+        record: Dict[str, Any] = {
+            "session_id": session_id,
+            "tool_id": tool_id,
+            "inputs": inputs,
+            "brand": brand,
+            "claude_session_id": None,
+            "created": time.time(),
+            "completed": False,
+            # Stage 0 starts running immediately below; the concurrency guard in
+            # _run_message rejects an overlapping /message until this clears
+            # (reset in _run_and_close's finally).
+            "busy": True,
+        }
+        _run_registry()[run_id] = record
+        # Durable mirror so runs/latest + artifacts resolve this run after a
+        # restart (best-effort; never blocks the launch).
+        _persist_run(run_id, record)
+
+        # Swarm tools: provision the session folder (dir + steering CLAUDE.md +
+        # ruflo init) before the agent's first turn so its swarm tools are ready,
+        # then tell the agent the EXACT absolute folder so it never guesses a path
+        # (the UI reads artifacts from this same engine-resolved dir).
+        if getattr(manifest, "swarm", False) and brand:
+            try:
+                brief = inputs.get("brief") if isinstance(inputs.get("brief"), str) else ""
+                folder = _provision_swarm_session(manifest, _kebab(brand), brand, brief or "")
+                if folder is not None:
+                    user_message += (
+                        "\n\nSESSION_FOLDER (absolute path — this exact directory is "
+                        "where you MUST write qna.json, readiness.json, prd.md and every "
+                        "artifact, and where your steering CLAUDE.md already lives; do "
+                        f"NOT invent another path): {folder}"
+                    )
+            except Exception:
+                logger.warning("swarm provision failed for %s", tool_id, exc_info=True)
+
+        _start_run(adapter, run_id, user_message, session_id, run_record=record,
+                   append_system_prompt=_STEP_GATE_SYSTEM_PROMPT,
+                   swarm=bool(getattr(manifest, "swarm", False)))
 
         logger.debug(
             "tool launch: tool_id=%s run_id=%s session_id=%s skill=%s",
             tool_id, run_id, session_id, skill,
         )
-        return web.json_response({"run_id": run_id}, status=202)
+        return web.json_response({"run_id": run_id, "session_id": session_id}, status=202)
+
+    # ------------------------------------------------------------------
+    # POST /v1/runs/{run_id}/message — resume a tool run's Claude Code
+    # session with a RAW user turn (live Workbench). Body {"text": "..."}.
+    # Streams run events with the SAME frame shape as GET
+    # /v1/runs/{run_id}/events so the frontend reuses its parser. Reuses
+    # _start_run with the run's stored session_id + claude_session_id so
+    # Forge continues its conversation (does NOT re-invoke /{skill}).
+    # 404 if run_id unknown; 400 on empty text.
+    # ------------------------------------------------------------------
+    async def _run_message(request: "web.Request") -> "web.StreamResponse":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+
+        run_id = request.match_info["run_id"]
+        record = _run_registry().get(run_id)
+        if record is None:
+            return web.json_response(
+                {"error": "run_not_found", "detail": f"No run for id={run_id!r}"},
+                status=404,
+            )
+
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response(
+                {"error": "invalid_json", "detail": "request body must be JSON"},
+                status=400,
+            )
+        text = body.get("text") if isinstance(body, dict) else None
+        if not isinstance(text, str) or not text.strip():
+            return web.json_response(
+                {"error": "empty_text", "detail": "'text' must be a non-empty string"},
+                status=400,
+            )
+        text = text.strip()
+
+        # Concurrency guard: a tool run executes one turn at a time on a single
+        # Claude Code session. If a turn is already in flight (initial launch or a
+        # prior /message), starting another would resume the same session mid-turn
+        # and interrupt/corrupt the running generation (e.g. a half-written
+        # artifact). Reject the overlap so the caller can wait for the turn to
+        # settle. The dashboard also disables its send/approve controls while
+        # streaming; this is the server-side backstop.
+        if record.get("busy"):
+            return web.json_response(
+                {"error": "run_busy",
+                 "detail": "a turn is already in progress for this run"},
+                status=409,
+            )
+
+        # Start a fresh run on the SAME session_id, resuming the same Claude
+        # Code conversation. Reuse the run_id so the SSE stream stays bound to
+        # the original run (its _run_streams queue is re-created by _start_run).
+        record["busy"] = True
+        _persist_run(run_id, record)
+        session_id = record["session_id"]
+        # Swarm tools need the Task tool + Ruflo on resume turns too (the refine
+        # loop re-spawns specialists), so carry the manifest's swarm flag through.
+        tool_id = record.get("tool_id") or ""
+        is_swarm = bool(getattr(_manifest_for(tool_id), "swarm", False))
+        # Workspace runs operate on the project folder — resume turns (every
+        # directive: start design, approve, implement…) MUST run there too, else
+        # the orchestrator resumes in engine_root and can't find the workspace.
+        # Prefer the record's stored cwd; derive from the artifacts dir after a
+        # restart (when the in-memory cwd is gone).
+        run_cwd = record.get("run_cwd")
+        if not run_cwd and tool_id == "workspace":
+            wsdir = _artifacts_dir_for(tool_id, record)
+            run_cwd = str(wsdir) if wsdir else None
+        _start_run(
+            adapter, run_id, text, session_id,
+            resume_claude_session_id=record.get("claude_session_id"),
+            run_record=record,
+            append_system_prompt=_STEP_GATE_SYSTEM_PROMPT,
+            swarm=is_swarm,
+            run_cwd=run_cwd,
+        )
+
+        # Stream the run events with the identical frame shape as
+        # _handle_run_events: a `data: {json}\n\n` SSE line per event, closing
+        # on the None sentinel. We drain the adapter's per-run queue directly.
+        for _ in range(20):
+            if run_id in adapter._run_streams:
+                break
+            await asyncio.sleep(0.05)
+        q = adapter._run_streams.get(run_id)
+        if q is None:
+            return web.json_response(
+                {"error": "stream_unavailable", "detail": "run stream not ready"},
+                status=500,
+            )
+
+        response = web.StreamResponse(
+            status=200,
+            headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+        await response.prepare(request)
+        try:
+            while True:
+                try:
+                    event = await asyncio.wait_for(q.get(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    await response.write(b": keepalive\n\n")
+                    continue
+                if event is None:
+                    await response.write(b": stream closed\n\n")
+                    break
+                await response.write(f"data: {json.dumps(event)}\n\n".encode())
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        finally:
+            adapter._run_streams.pop(run_id, None)
+            adapter._run_streams_created.pop(run_id, None)
+        return response
+
+    # ------------------------------------------------------------------
+    # GET /v1/tools/{tool_id}/artifacts?run={run_id} — list files the run
+    # produced under ${HERMES_VAULT_PATH}/30_Resources/Brands/{brand}, where
+    # brand = kebab-case of the run's `brand` input. Walks recursively; each
+    # entry is {name, relpath, kind, size, mtime}, sorted by mtime desc.
+    # Missing dir → {"files": []} (not an error).
+    # ------------------------------------------------------------------
+    async def _tool_artifacts(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+
+        tool_id = request.match_info["tool_id"]
+        if not tool_id or "/" in tool_id or "\\" in tool_id or ".." in tool_id:
+            return web.json_response(
+                {"error": "invalid_tool_id", "detail": "tool_id must be a simple slug"},
+                status=400,
+            )
+        run_id = request.query.get("run", "")
+        record = _run_registry().get(run_id)
+        if record is None:
+            return web.json_response(
+                {"error": "run_not_found", "detail": f"No run for id={run_id!r}"},
+                status=404,
+            )
+
+        artifacts_dir = _artifacts_dir_for(tool_id, record)
+        if artifacts_dir is None:
+            return web.json_response({"files": []})
+
+        def _list() -> List[Dict[str, Any]]:
+            out: List[Dict[str, Any]] = []
+            if not artifacts_dir.is_dir():
+                return out
+            for p in artifacts_dir.rglob("*"):
+                if not p.is_file():
+                    continue
+                try:
+                    st = p.stat()
+                except OSError:
+                    continue
+                out.append({
+                    "name": p.name,
+                    "relpath": p.relative_to(artifacts_dir).as_posix(),
+                    "kind": _artifact_kind(p.name),
+                    "size": st.st_size,
+                    "mtime": st.st_mtime,
+                })
+            out.sort(key=lambda f: f["mtime"], reverse=True)
+            return out
+
+        loop = asyncio.get_running_loop()
+        try:
+            files = await loop.run_in_executor(None, _list)
+        except Exception as exc:
+            logger.exception("/v1/tools/%s/artifacts failed", tool_id)
+            return web.json_response(
+                {"files": [], "error": str(exc)}, status=500
+            )
+        return web.json_response({"files": files})
+
+    # ------------------------------------------------------------------
+    # GET /v1/tools/{tool_id}/artifacts/raw?run={run_id}&path={relpath} —
+    # stream one artifact's bytes with a correct Content-Type (text/html so
+    # it renders in an iframe; text/markdown; image/* per ext; octet-stream
+    # else). Resolves (artifacts_dir / relpath) and asserts containment with
+    # the same validate_within_dir helper the upload endpoint uses; a path
+    # confined to the uploads root is also allowed. 400 on ../ escape, 404 if
+    # missing. Never serves outside the allowed roots / leaks host paths.
+    # ------------------------------------------------------------------
+    async def _tool_artifacts_raw(request: "web.Request") -> "web.StreamResponse":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+
+        tool_id = request.match_info["tool_id"]
+        if not tool_id or "/" in tool_id or "\\" in tool_id or ".." in tool_id:
+            return web.json_response(
+                {"error": "invalid_tool_id", "detail": "tool_id must be a simple slug"},
+                status=400,
+            )
+        run_id = request.query.get("run", "")
+        rel_path = request.query.get("path", "")
+        record = _run_registry().get(run_id)
+        if record is None:
+            return web.json_response(
+                {"error": "run_not_found", "detail": f"No run for id={run_id!r}"},
+                status=404,
+            )
+        if not rel_path:
+            return web.json_response(
+                {"error": "missing_path", "detail": "'path' query param required"},
+                status=400,
+            )
+
+        from tools.path_security import validate_within_dir
+
+        artifacts_dir = _artifacts_dir_for(tool_id, record)
+        uploads_root = _uploads_root()
+
+        # Resolve against the artifacts dir first, then the uploads root. A
+        # candidate is only usable if it (a) stays contained in that root
+        # (reject ../ escapes) and (b) names an existing file there. We track
+        # whether the path was contained in ANY allowed root so a pure traversal
+        # attempt yields 400, while a contained-but-missing path yields 404.
+        dest: Optional[Path] = None
+        any_contained = False
+        for root in (artifacts_dir, uploads_root):
+            if root is None:
+                continue
+            candidate = root / rel_path
+            if validate_within_dir(candidate, root) is not None:
+                continue
+            any_contained = True
+            if candidate.is_file():
+                dest = candidate
+                break
+        if dest is None:
+            if not any_contained:
+                return web.json_response(
+                    {"error": "path_escape",
+                     "detail": "path escapes the allowed artifact roots"},
+                    status=400,
+                )
+            return web.json_response(
+                {"error": "file_not_found", "detail": "artifact not found"},
+                status=404,
+            )
+
+        content_type = _artifact_content_type(dest.name)
+        try:
+            return web.FileResponse(
+                dest, headers={"Content-Type": content_type, "Cache-Control": "no-cache"}
+            )
+        except Exception:
+            logger.exception("/v1/tools/%s/artifacts/raw stream failed", tool_id)
+            return web.json_response(
+                {"error": "read_error", "detail": "could not read artifact"},
+                status=500,
+            )
+
+    # ------------------------------------------------------------------
+    # GET /v1/tools/{tool_id}/projects — list past projects (brand folders)
+    # straight from disk under _brands_root(), independent of the EPHEMERAL
+    # _RUN_REGISTRY (wiped on restart). Each entry is
+    # {id, name, artifact_count, updated, kinds[]} where id = the (already
+    # kebab) folder name, name = a title-cased display name, updated = the max
+    # file mtime in the folder, artifact_count = recursive file count, kinds =
+    # sorted unique _artifact_kind values present. Only folders with ≥1 file
+    # are included; sorted by `updated` desc. Missing/empty root → {"projects":
+    # []}. Reads _brands_root(): tools without a brands dir just yield [].
+    # ------------------------------------------------------------------
+    async def _tool_projects(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+
+        tool_id = request.match_info["tool_id"]
+        if not tool_id or "/" in tool_id or "\\" in tool_id or ".." in tool_id:
+            return web.json_response(
+                {"error": "invalid_tool_id", "detail": "tool_id must be a simple slug"},
+                status=400,
+            )
+
+        root = _collection_root_for(tool_id)
+
+        is_workspace = tool_id == "workspace"
+
+        def _list() -> List[Dict[str, Any]]:
+            out: List[Dict[str, Any]] = []
+            if not root.is_dir():
+                return out
+            for folder in root.iterdir():
+                if not folder.is_dir():
+                    continue
+                marker = folder / _WORKSPACE_MARKER
+                if marker.exists():
+                    # Marked workspace: describe it from the marker + workspace.json
+                    # — NO tree walk (10_Projects can hold huge foreign projects).
+                    try:
+                        meta = json.loads(marker.read_text(encoding="utf-8")) or {}
+                    except Exception:
+                        meta = {}
+                    ws = folder / "workspace.json"
+                    phase = None
+                    scripts: Dict[str, Any] = {}
+                    try:
+                        updated = ws.stat().st_mtime if ws.exists() else marker.stat().st_mtime
+                    except OSError:
+                        updated = float(meta.get("created") or 0.0)
+                    if ws.exists():
+                        try:
+                            doc = json.loads(ws.read_text(encoding="utf-8")) or {}
+                            phase = doc.get("phase")
+                            if isinstance(doc.get("scripts"), dict):
+                                scripts = doc["scripts"]
+                        except Exception:
+                            pass
+                    # Fall back to scripts present on disk so the card's actions work
+                    # even before workspace.json records them.
+                    for kind in _WORKSPACE_SCRIPTS:
+                        if kind not in scripts and (folder / "scripts" / f"{kind}.sh").is_file():
+                            scripts[kind] = f"scripts/{kind}.sh"
+                    out.append({
+                        "id": folder.name,
+                        "name": meta.get("name") or _titleize(folder.name),
+                        "artifact_count": 0,
+                        "updated": updated,
+                        "kinds": ["workspace"],
+                        "phase": phase or meta.get("phase"),
+                        "scripts": scripts,
+                    })
+                    continue
+                # Unmarked folder. Under the workspace collection these are the
+                # user's own projects → skip. Other collections (Brands/Brainstorms)
+                # hold only the tool's own outputs → walk + count as before.
+                if is_workspace:
+                    continue
+                count = 0
+                latest = 0.0
+                kinds: set = set()
+                for p in folder.rglob("*"):
+                    if not p.is_file():
+                        continue
+                    try:
+                        st = p.stat()
+                    except OSError:
+                        continue
+                    count += 1
+                    if st.st_mtime > latest:
+                        latest = st.st_mtime
+                    kinds.add(_artifact_kind(p.name))
+                if count == 0:
+                    continue
+                out.append({
+                    "id": folder.name,
+                    "name": _titleize(folder.name),
+                    "artifact_count": count,
+                    "updated": latest,
+                    "kinds": sorted(kinds),
+                })
+            out.sort(key=lambda f: f["updated"], reverse=True)
+            return out
+
+        loop = asyncio.get_running_loop()
+        try:
+            projects = await loop.run_in_executor(None, _list)
+        except Exception as exc:
+            logger.exception("/v1/tools/%s/projects failed", tool_id)
+            return web.json_response(
+                {"projects": [], "error": str(exc)}, status=500
+            )
+        return web.json_response({"projects": projects})
+
+    # ------------------------------------------------------------------
+    # GET /v1/tools/{tool_id}/projects/{brand_id}/artifacts — list a single
+    # project's artifacts straight from disk (no run lookup). dir =
+    # _brands_root()/_kebab(brand_id); recursive walk, each entry is
+    # {name, relpath, kind, size, mtime} sorted by mtime desc — SAME shape as
+    # the run-scoped list so the client reuses its ArtifactFile type. Missing
+    # dir → {"files": []} (NOT 404).
+    # ------------------------------------------------------------------
+    async def _tool_project_artifacts(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+
+        tool_id = request.match_info["tool_id"]
+        if not tool_id or "/" in tool_id or "\\" in tool_id or ".." in tool_id:
+            return web.json_response(
+                {"error": "invalid_tool_id", "detail": "tool_id must be a simple slug"},
+                status=400,
+            )
+
+        brand = _kebab(request.match_info.get("brand_id", ""))
+        if not brand:
+            return web.json_response({"files": []})
+        artifacts_dir = _collection_root_for(tool_id) / brand
+
+        def _list() -> List[Dict[str, Any]]:
+            out: List[Dict[str, Any]] = []
+            if not artifacts_dir.is_dir():
+                return out
+            for p in artifacts_dir.rglob("*"):
+                if not p.is_file():
+                    continue
+                try:
+                    st = p.stat()
+                except OSError:
+                    continue
+                out.append({
+                    "name": p.name,
+                    "relpath": p.relative_to(artifacts_dir).as_posix(),
+                    "kind": _artifact_kind(p.name),
+                    "size": st.st_size,
+                    "mtime": st.st_mtime,
+                })
+            out.sort(key=lambda f: f["mtime"], reverse=True)
+            return out
+
+        loop = asyncio.get_running_loop()
+        try:
+            files = await loop.run_in_executor(None, _list)
+        except Exception as exc:
+            logger.exception("/v1/tools/%s/projects/%s/artifacts failed", tool_id, brand)
+            return web.json_response(
+                {"files": [], "error": str(exc)}, status=500
+            )
+        return web.json_response({"files": files})
+
+    # ------------------------------------------------------------------
+    # GET /v1/tools/{tool_id}/projects/{brand_id}/artifacts/raw?path={relpath}
+    # — stream one project artifact's bytes with a correct Content-Type
+    # (text/html so it iframes). dir = _brands_root()/_kebab(brand_id); resolves
+    # (dir / path) and asserts containment via validate_within_dir (../ escape →
+    # 400). 404 if missing. Never serves outside the brand dir / leaks host
+    # paths. No run lookup.
+    # ------------------------------------------------------------------
+    async def _tool_project_artifacts_raw(request: "web.Request") -> "web.StreamResponse":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+
+        tool_id = request.match_info["tool_id"]
+        if not tool_id or "/" in tool_id or "\\" in tool_id or ".." in tool_id:
+            return web.json_response(
+                {"error": "invalid_tool_id", "detail": "tool_id must be a simple slug"},
+                status=400,
+            )
+
+        brand = _kebab(request.match_info.get("brand_id", ""))
+        rel_path = request.query.get("path", "")
+        if not brand:
+            return web.json_response(
+                {"error": "file_not_found", "detail": "artifact not found"},
+                status=404,
+            )
+        if not rel_path:
+            return web.json_response(
+                {"error": "missing_path", "detail": "'path' query param required"},
+                status=400,
+            )
+
+        from tools.path_security import validate_within_dir
+
+        artifacts_dir = _collection_root_for(tool_id) / brand
+        candidate = artifacts_dir / rel_path
+        if validate_within_dir(candidate, artifacts_dir) is not None:
+            return web.json_response(
+                {"error": "path_escape",
+                 "detail": "path escapes the project artifact dir"},
+                status=400,
+            )
+        if not candidate.is_file():
+            return web.json_response(
+                {"error": "file_not_found", "detail": "artifact not found"},
+                status=404,
+            )
+
+        content_type = _artifact_content_type(candidate.name)
+        try:
+            return web.FileResponse(
+                candidate,
+                headers={"Content-Type": content_type, "Cache-Control": "no-cache"},
+            )
+        except Exception:
+            logger.exception(
+                "/v1/tools/%s/projects/%s/artifacts/raw stream failed", tool_id, brand
+            )
+            return web.json_response(
+                {"error": "read_error", "detail": "could not read artifact"},
+                status=500,
+            )
 
     # ------------------------------------------------------------------
     # POST /v1/goal — start a goal-mode run (objective + judge loop) for
@@ -1045,7 +2352,7 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
         session_id = f"toolbuild-{slug}-{uuid.uuid4().hex[:8]}"
         _start_run(
             adapter, run_id, enrich_message, session_id,
-            model_override=_TOOL_BUILDER_MODEL,
+            model_override=_builder_model(),
             append_system_prompt=_TOOL_BUILDER_ENRICH_PERSONA,
         )
 
@@ -1145,9 +2452,10 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
                     session_id=session_id,
                     stream_delta_callback=_on_delta,
                     ephemeral_system_prompt=_TOOL_BUILDER_REFINE_PERSONA,
+                    tier="t2",
                 )
                 agent._append_system_prompt = _TOOL_BUILDER_REFINE_PERSONA
-                agent._model_override = _TOOL_BUILDER_MODEL
+                agent._model_override = _builder_model()
                 agent.run_conversation(
                     user_message=user_message,
                     conversation_history=[],
@@ -1251,6 +2559,837 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
         return web.json_response(_manifest_to_dict(manifest))
 
     # ------------------------------------------------------------------
+    # POST /v1/tools/{tool_id}/upload — accept file/image uploads for a
+    # tool's run form (Labs "Run tool"). multipart/form-data; each part's
+    # form-field NAME is the manifest input id it belongs to (multiple parts
+    # may share one name → multi-file inputs). Files are written UNDER THE
+    # WRITABLE DATA ROOT ONLY: /opt/data/uploads/{tool_id}/{ts-rand}/{field}/
+    # {safe_filename}. Returns {"files": {"<field_id>": ["<container path>",
+    # ...]}} — these /opt/data/uploads/... paths are passed back inside the
+    # launch ``inputs`` map; the launched skill reads them.
+    # ------------------------------------------------------------------
+    async def _tool_upload(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+
+        tool_id = request.match_info["tool_id"]
+        # Validate tool_id — no path traversal characters (mirrors _tool_launch).
+        if not tool_id or "/" in tool_id or "\\" in tool_id or ".." in tool_id:
+            return web.json_response(
+                {"error": "invalid_tool_id", "detail": "tool_id must be a simple slug"},
+                status=400,
+            )
+
+        # Resolve the tool via the same discover_manifests() path as launch/get.
+        try:
+            from tools.tool_manifest import discover_manifests
+            manifests = discover_manifests()
+        except Exception as exc:
+            logger.exception("/v1/tools/%s/upload: discover_manifests failed", tool_id)
+            return web.json_response(
+                {"error": "manifest_error", "detail": str(exc)}, status=500
+            )
+
+        manifest = next((m for m in manifests if m.tool == tool_id), None)
+        if manifest is None:
+            return web.json_response(
+                {"error": "tool_not_found", "detail": f"No tool manifest for id={tool_id!r}"},
+                status=404,
+            )
+
+        # Require a multipart body.
+        if not (request.content_type or "").startswith("multipart/"):
+            return web.json_response(
+                {"error": "invalid_content_type",
+                 "detail": "expected multipart/form-data"},
+                status=400,
+            )
+
+        # Per-request destination: /opt/data/uploads/{tool_id}/{ts-rand}.
+        uploads_root = _uploads_root()
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        batch_dir = uploads_root / tool_id / f"{stamp}-{uuid.uuid4().hex[:8]}"
+
+        files: Dict[str, List[str]] = {}
+        try:
+            reader = await request.multipart()
+        except Exception:
+            return web.json_response(
+                {"error": "invalid_multipart", "detail": "could not parse multipart body"},
+                status=400,
+            )
+
+        loop = asyncio.get_running_loop()
+        while True:
+            part = await reader.next()
+            if part is None:
+                break
+            # The form-field NAME is the manifest input id this file belongs to.
+            field_id = part.name
+            if not field_id or not _UPLOAD_FIELD_ID_RE.match(field_id):
+                return web.json_response(
+                    {"error": "invalid_field",
+                     "detail": "each upload part needs a valid input-id field name"},
+                    status=400,
+                )
+            # Only file parts carry a filename; reject bare form fields.
+            safe_name = _sanitize_upload_filename(part.filename)
+            if safe_name is None:
+                return web.json_response(
+                    {"error": "invalid_filename",
+                     "detail": f"part {field_id!r} has a missing or unsafe filename"},
+                    status=400,
+                )
+
+            field_dir = batch_dir / field_id
+            dest = field_dir / safe_name
+            # Confine the resolved write target to the uploads root (defense in
+            # depth on top of the per-component sanitization above).
+            from tools.path_security import validate_within_dir
+            if validate_within_dir(dest, uploads_root) is not None:
+                return web.json_response(
+                    {"error": "path_escape",
+                     "detail": "upload target escapes the uploads root"},
+                    status=400,
+                )
+
+            # Stream to disk with a per-file size cap; reject empties.
+            written = 0
+            try:
+                await loop.run_in_executor(
+                    None, lambda d=field_dir: d.mkdir(parents=True, exist_ok=True)
+                )
+                with open(dest, "wb") as fh:
+                    while True:
+                        chunk = await part.read_chunk()
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        if written > _UPLOAD_MAX_BYTES:
+                            fh.close()
+                            os.unlink(dest)
+                            return web.json_response(
+                                {"error": "file_too_large",
+                                 "detail": f"{field_id}/{safe_name} exceeds "
+                                           f"{_UPLOAD_MAX_BYTES // (1024 * 1024)} MB"},
+                                status=413,
+                            )
+                        fh.write(chunk)
+            except Exception as exc:
+                logger.exception("/v1/tools/%s/upload: write failed", tool_id)
+                # Roll back the partial batch; don't leak host paths.
+                try:
+                    import shutil
+                    shutil.rmtree(batch_dir, ignore_errors=True)
+                except Exception:
+                    pass
+                return web.json_response(
+                    {"error": "write_error", "detail": str(exc)}, status=500
+                )
+
+            if written == 0:
+                os.unlink(dest)
+                return web.json_response(
+                    {"error": "empty_file",
+                     "detail": f"part {field_id}/{safe_name} is empty"},
+                    status=400,
+                )
+
+            files.setdefault(field_id, []).append(str(dest))
+
+        if not files:
+            return web.json_response(
+                {"error": "no_files", "detail": "no file parts in upload"},
+                status=400,
+            )
+
+        logger.info(
+            "tool upload: tool_id=%s fields=%s files=%d",
+            tool_id, list(files), sum(len(v) for v in files.values()),
+        )
+        return web.json_response({"files": files})
+
+    # ------------------------------------------------------------------
+    # POST /v1/tools/{tool_id}/brand-assets?run={run_id} — save GENERATED
+    # images/videos from the Brand Maker run screen into the brand's vault
+    # folder. multipart/form-data; one or more file parts under ANY field name
+    # (e.g. "assets"). Files land under the rw /vault Brands mount at
+    # ${HERMES_VAULT_PATH}/30_Resources/Brands/{brand}/assets/{safe_filename},
+    # where brand = kebab-case of the run's `brand` input (same derivation the
+    # artifacts list uses). Returns {"files": [{name, relpath, kind, size,
+    # mtime}]} where relpath is RELATIVE TO THE BRAND DIR ("assets/<name>") so
+    # the existing artifacts list and /artifacts/raw?path=assets/<name> serve
+    # them unchanged. Video gets a larger per-file cap (200 MB).
+    # ------------------------------------------------------------------
+    async def _tool_brand_assets(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+
+        tool_id = request.match_info["tool_id"]
+        # Validate tool_id — no path traversal characters (mirrors the siblings).
+        if not tool_id or "/" in tool_id or "\\" in tool_id or ".." in tool_id:
+            return web.json_response(
+                {"error": "invalid_tool_id", "detail": "tool_id must be a simple slug"},
+                status=400,
+            )
+
+        run_id = request.query.get("run", "")
+        record = _run_registry().get(run_id)
+        if record is None:
+            return web.json_response(
+                {"error": "run_not_found", "detail": f"No run for id={run_id!r}"},
+                status=404,
+            )
+
+        # Brand dir = same derivation as _tool_artifacts. The /assets subdir
+        # lives under the rw /vault/30_Resources/Brands mount, so it IS
+        # writable; never write under read-only roots.
+        brand = _kebab(record.get("brand") or "")
+        if not brand:
+            return web.json_response(
+                {"error": "run_not_found",
+                 "detail": "run has no resolvable brand for asset storage"},
+                status=404,
+            )
+        brand_dir = _collection_root_for(tool_id) / brand
+        assets_dir = brand_dir / "assets"
+
+        # Require a multipart body.
+        if not (request.content_type or "").startswith("multipart/"):
+            return web.json_response(
+                {"error": "invalid_content_type",
+                 "detail": "expected multipart/form-data"},
+                status=400,
+            )
+
+        try:
+            reader = await request.multipart()
+        except Exception:
+            return web.json_response(
+                {"error": "invalid_multipart", "detail": "could not parse multipart body"},
+                status=400,
+            )
+
+        from tools.path_security import validate_within_dir
+
+        loop = asyncio.get_running_loop()
+        files: List[Dict[str, Any]] = []
+        while True:
+            part = await reader.next()
+            if part is None:
+                break
+            # File parts under ANY field name; reject bare form fields (no name).
+            safe_name = _sanitize_upload_filename(part.filename)
+            if safe_name is None:
+                return web.json_response(
+                    {"error": "invalid_filename",
+                     "detail": "each upload part needs a safe filename"},
+                    status=400,
+                )
+
+            dest = assets_dir / safe_name
+            # Confine the resolved write target to <brand_dir>/assets (defense in
+            # depth on top of the per-component sanitization above).
+            if validate_within_dir(dest, assets_dir) is not None:
+                return web.json_response(
+                    {"error": "path_escape",
+                     "detail": "asset target escapes the brand assets dir"},
+                    status=400,
+                )
+
+            # Stream to disk with a per-file size cap; reject empties.
+            written = 0
+            try:
+                await loop.run_in_executor(
+                    None, lambda d=assets_dir: d.mkdir(parents=True, exist_ok=True)
+                )
+                with open(dest, "wb") as fh:
+                    while True:
+                        chunk = await part.read_chunk()
+                        if not chunk:
+                            break
+                        written += len(chunk)
+                        if written > _BRAND_ASSET_MAX_BYTES:
+                            fh.close()
+                            os.unlink(dest)
+                            return web.json_response(
+                                {"error": "file_too_large",
+                                 "detail": f"{safe_name} exceeds "
+                                           f"{_BRAND_ASSET_MAX_BYTES // (1024 * 1024)} MB"},
+                                status=413,
+                            )
+                        fh.write(chunk)
+            except Exception as exc:
+                logger.exception("/v1/tools/%s/brand-assets: write failed", tool_id)
+                # Clean up just this file; don't leak host paths.
+                try:
+                    os.unlink(dest)
+                except OSError:
+                    pass
+                return web.json_response(
+                    {"error": "write_error", "detail": str(exc)}, status=500
+                )
+
+            if written == 0:
+                os.unlink(dest)
+                return web.json_response(
+                    {"error": "empty_file", "detail": f"part {safe_name} is empty"},
+                    status=400,
+                )
+
+            try:
+                st = dest.stat()
+            except OSError:
+                st = None
+            files.append({
+                "name": safe_name,
+                "relpath": dest.relative_to(brand_dir).as_posix(),
+                "kind": _artifact_kind(safe_name),
+                "size": st.st_size if st else written,
+                "mtime": st.st_mtime if st else None,
+            })
+
+        if not files:
+            return web.json_response(
+                {"error": "no_files", "detail": "no file parts in upload"},
+                status=400,
+            )
+
+        logger.info(
+            "brand-assets: tool_id=%s run=%s brand=%s files=%d",
+            tool_id, run_id, brand, len(files),
+        )
+        return web.json_response({"files": files})
+
+    # ------------------------------------------------------------------
+    # GET /v1/tools/{tool_id}/runs/latest?brand={brand_id} — deep-link resume.
+    # POST /v1/tools/workspace/create — ingest a project (local folder / public
+    # GitHub repo / promoted brainstorm) into 10_Projects/{slug}, then launch the
+    # Architect orchestrator run against it (cwd = workspace). Body:
+    # {name, source_type: folder|github|brainstorm, source_ref}.
+    #   202 → {workspace_id, run_id, session_id, path}
+    # ------------------------------------------------------------------
+    async def _workspace_create(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_json"}, status=400)
+        body = body if isinstance(body, dict) else {}
+        name = body.get("name") if isinstance(body.get("name"), str) else ""
+        source_type = body.get("source_type") if isinstance(body.get("source_type"), str) else ""
+        source_ref = body.get("source_ref") if isinstance(body.get("source_ref"), str) else ""
+        slug = _kebab(name)
+        if not slug or source_type not in ("folder", "github", "brainstorm") or not source_ref:
+            return web.json_response(
+                {"error": "invalid_request",
+                 "detail": "require name, source_type (folder|github|brainstorm), source_ref"},
+                status=400,
+            )
+
+        try:
+            from tools.tool_manifest import discover_manifests
+            manifest = {m.tool: m for m in discover_manifests()}.get("workspace")
+        except Exception as exc:
+            logger.exception("workspace create: manifest load failed")
+            return web.json_response({"error": "manifest_error", "detail": str(exc)}, status=500)
+        if manifest is None:
+            return web.json_response({"error": "tool_not_found", "detail": "workspace manifest missing"}, status=404)
+
+        workspaces_root = _collection_root_for("workspace")
+        loop = asyncio.get_running_loop()
+
+        # A local folder that already lives directly under the workspaces root is
+        # onboarded IN PLACE (no copy onto itself) — its basename is the slug.
+        in_place = False
+        if source_type == "folder":
+            try:
+                src = Path(source_ref).resolve()
+            except Exception:
+                src = None
+            if src is not None and src.is_dir() and src.parent == workspaces_root.resolve():
+                in_place, slug, dest = True, src.name, src
+        if not in_place:
+            dest = workspaces_root / slug
+
+        # Already a workspace? Surface it so the UI can offer "Open existing".
+        if (dest / _WORKSPACE_MARKER).exists():
+            return web.json_response(
+                {"error": "already_onboarded",
+                 "detail": f"'{slug}' is already onboarded as a workspace",
+                 "workspace_id": slug, "slug": slug, "path": str(dest)},
+                status=409,
+            )
+
+        # Copy/clone into place (skip for in-place onboarding of an existing folder).
+        if not in_place:
+            try:
+                await loop.run_in_executor(None, _ingest_workspace, source_type, source_ref, dest)
+            except Exception as exc:
+                logger.warning("workspace ingest failed for %s", slug, exc_info=True)
+                return web.json_response({"error": "ingest_failed", "detail": str(exc)}, status=400)
+
+        # Stamp the marker so the list endpoint surfaces this folder (and ignores
+        # the user's other projects under 10_Projects).
+        _write_workspace_marker(dest, {
+            "name": name, "slug": slug,
+            "source": {"type": source_type, "ref": source_ref},
+            "created": time.time(),
+        })
+
+        # Launch the orchestrator run against the ingested folder.
+        skill = manifest.skill
+        inputs = {"name": name, "source_type": source_type, "source_ref": source_ref}
+        user_message = f"/{skill}\n\nInputs: {json.dumps(inputs, ensure_ascii=False)}"
+        run_id = f"run_{uuid.uuid4().hex}"
+        session_id = f"tool-workspace-{uuid.uuid4().hex[:8]}"
+        record: Dict[str, Any] = {
+            "session_id": session_id, "tool_id": "workspace", "inputs": inputs,
+            "brand": name, "claude_session_id": None, "created": time.time(),
+            "completed": False, "busy": True,
+            # The run's working directory — reused by /message resume turns.
+            "run_cwd": str(dest),
+        }
+        _run_registry()[run_id] = record
+        _persist_run(run_id, record)
+
+        try:
+            folder = _provision_swarm_session(manifest, slug, name, "")
+            if folder is not None:
+                user_message += (
+                    "\n\nSESSION_FOLDER (absolute path — this exact directory is the "
+                    "workspace root and your cwd; write workspace.json and every artifact "
+                    f"here, do NOT invent another path): {folder}"
+                )
+        except Exception:
+            logger.warning("workspace provision failed for %s", slug, exc_info=True)
+
+        _start_run(adapter, run_id, user_message, session_id, run_record=record,
+                   append_system_prompt=_STEP_GATE_SYSTEM_PROMPT, swarm=True, run_cwd=str(dest))
+        return web.json_response(
+            {"workspace_id": slug, "run_id": run_id, "session_id": session_id, "path": str(dest)},
+            status=202,
+        )
+
+    # ------------------------------------------------------------------
+    # POST /v1/tools/workspace/exec — run a workspace's build/run/test script
+    # (scripts/{script}.sh) in the workspace folder and stream stdout/stderr as
+    # SSE (`data: {type,...}` frames). Body {slug, script: build|run|test}. Only
+    # the three named scripts run — never arbitrary commands. The process lives as
+    # long as the stream (or until /exec/stop); closing it kills the whole tree.
+    # ------------------------------------------------------------------
+    async def _workspace_exec(request: "web.Request") -> "web.StreamResponse":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_json"}, status=400)
+        body = body if isinstance(body, dict) else {}
+        slug = _kebab(body.get("slug") if isinstance(body.get("slug"), str) else "")
+        script = body.get("script") if isinstance(body.get("script"), str) else ""
+        if not slug or script not in _WORKSPACE_SCRIPTS:
+            return web.json_response(
+                {"error": "invalid_request", "detail": "require slug + script (build|run|test)"},
+                status=400,
+            )
+        ws = _collection_root_for("workspace") / slug
+        if not (ws / _WORKSPACE_MARKER).exists():
+            return web.json_response({"error": "not_a_workspace", "detail": "unknown workspace"}, status=404)
+        script_path = ws / "scripts" / f"{script}.sh"
+        if not script_path.is_file():
+            return web.json_response(
+                {"error": "script_missing",
+                 "detail": f"scripts/{script}.sh not found — provisioning may not have authored it yet"},
+                status=404,
+            )
+
+        key = f"{slug}:{script}"
+        existing = _WORKSPACE_EXEC_PROCS.get(key)
+        if existing is not None and existing.returncode is None:
+            return web.json_response(
+                {"error": "already_running", "detail": "that script is already running — stop it first"},
+                status=409,
+            )
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "bash", str(script_path),
+                cwd=str(ws),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                start_new_session=True,  # own process group → kill the whole tree
+            )
+        except Exception as exc:
+            logger.exception("workspace exec failed to start: %s", key)
+            return web.json_response({"error": "spawn_failed", "detail": str(exc)}, status=500)
+        _WORKSPACE_EXEC_PROCS[key] = proc
+
+        resp = web.StreamResponse(
+            status=200,
+            headers={"Content-Type": "text/event-stream", "Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+        await resp.prepare(request)
+
+        async def _send(obj: Dict[str, Any]) -> None:
+            await resp.write(f"data: {json.dumps(obj)}\n\n".encode())
+
+        await _send({"type": "start", "slug": slug, "script": script})
+        try:
+            stream = proc.stdout
+            assert stream is not None
+            while True:
+                line = await stream.readline()
+                if not line:
+                    break
+                await _send({"type": "line", "text": line.decode("utf-8", "replace").rstrip("\n")})
+            code = await proc.wait()
+            await _send({"type": "exit", "code": code})
+        except (asyncio.CancelledError, ConnectionResetError):
+            raise
+        except Exception as exc:
+            logger.exception("workspace exec stream error: %s", key)
+            try:
+                await _send({"type": "error", "detail": str(exc)})
+            except Exception:
+                pass
+        finally:
+            # Closing the stream (or a crash) kills the script tree so nothing leaks.
+            _kill_proc_group(proc)
+            if _WORKSPACE_EXEC_PROCS.get(key) is proc:
+                _WORKSPACE_EXEC_PROCS.pop(key, None)
+            try:
+                await resp.write_eof()
+            except Exception:
+                pass
+        return resp
+
+    # ------------------------------------------------------------------
+    # GET /v1/tools/workspace/browse?path=… — list sub-folders for the "local
+    # folder" picker. Scoped to the browsable root (the mounted vault) so the
+    # selected path is one the engine can actually copy from; traversal above
+    # the root is rejected and symlinks/heavy build dirs are skipped.
+    # ------------------------------------------------------------------
+    async def _workspace_browse(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        root = _browse_root().resolve()
+        raw = request.query.get("path") or str(root)
+        try:
+            target = Path(raw).resolve()
+        except Exception:
+            target = root
+        # Containment: never escape the browse root.
+        if not (target == root or target.is_relative_to(root)):
+            target = root
+        if not target.is_dir():
+            target = root
+
+        def _list() -> List[Dict[str, str]]:
+            out: List[Dict[str, str]] = []
+            try:
+                children = sorted(target.iterdir(), key=lambda p: p.name.lower())
+            except OSError:
+                return out
+            for child in children:
+                if child.is_symlink() or not child.is_dir():
+                    continue
+                if child.name.startswith(".") or child.name in _BROWSE_SKIP:
+                    continue
+                out.append({"name": child.name, "path": str(child)})
+            return out
+
+        entries = await asyncio.get_running_loop().run_in_executor(None, _list)
+        return web.json_response({
+            "root": str(root),
+            "path": str(target),
+            "parent": (str(target.parent) if target != root else None),
+            "entries": entries,
+        })
+
+    # POST /v1/tools/workspace/exec/stop — kill a running build/run/test script.
+    async def _workspace_exec_stop(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+        slug = _kebab(body.get("slug") if isinstance(body.get("slug"), str) else "")
+        script = body.get("script") if isinstance(body.get("script"), str) else ""
+        proc = _WORKSPACE_EXEC_PROCS.get(f"{slug}:{script}")
+        if proc is None or proc.returncode is not None:
+            return web.json_response({"stopped": False, "detail": "not running"})
+        _kill_proc_group(proc)
+        _WORKSPACE_EXEC_PROCS.pop(f"{slug}:{script}", None)
+        return web.json_response({"stopped": True})
+
+    # POST /v1/tools/workspace/rename — update a workspace's display name (the
+    # marker + workspace.json). Body {slug, name}. The folder/slug is unchanged.
+    async def _workspace_rename(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_json"}, status=400)
+        body = body if isinstance(body, dict) else {}
+        slug = _kebab(body.get("slug") if isinstance(body.get("slug"), str) else "")
+        name = (body.get("name") if isinstance(body.get("name"), str) else "").strip()
+        if not slug or not name:
+            return web.json_response(
+                {"error": "invalid_request", "detail": "require slug + name"}, status=400)
+        ws = _collection_root_for("workspace") / slug
+        marker = ws / _WORKSPACE_MARKER
+        if not marker.exists():
+            return web.json_response({"error": "not_a_workspace", "detail": "unknown workspace"}, status=404)
+        try:
+            meta = json.loads(marker.read_text(encoding="utf-8")) or {}
+        except Exception:
+            meta = {}
+        meta["name"] = name
+        _write_workspace_marker(ws, meta)
+        wsjson = ws / "workspace.json"
+        if wsjson.exists():
+            try:
+                doc = json.loads(wsjson.read_text(encoding="utf-8")) or {}
+                doc["name"] = name
+                wsjson.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception:
+                logger.warning("rename: could not update workspace.json for %s", slug, exc_info=True)
+        return web.json_response({"ok": True, "slug": slug, "name": name})
+
+    # Returns the MOST RECENT run in _RUN_REGISTRY whose tool_id matches and
+    # POST /v1/tools/{tool_id}/promote — copy a completed brainstorm session
+    # folder (Ruflo state + qna.json/readiness.json/prd.md + CLAUDE.md) into the
+    # workspaces root so the architect/dev phase can pick it up. Body: {run} or
+    # {slug}/{brand}. Idempotent overwrite. 200 → {workspace_id, path}.
+    # ------------------------------------------------------------------
+    async def _tool_promote(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+
+        tool_id = request.match_info["tool_id"]
+        if not tool_id or "/" in tool_id or "\\" in tool_id or ".." in tool_id:
+            return web.json_response(
+                {"error": "invalid_tool_id", "detail": "tool_id must be a simple slug"},
+                status=400,
+            )
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        body = body if isinstance(body, dict) else {}
+
+        # Resolve the source dir: prefer an explicit run, else slug/brand input.
+        record: Optional[Dict[str, Any]] = None
+        run_id = body.get("run") if isinstance(body.get("run"), str) else ""
+        if run_id:
+            record = _run_registry().get(run_id)
+        slug = _kebab(
+            (record or {}).get("brand")
+            or body.get("slug")
+            or body.get("brand")
+            or ""
+        )
+        if not slug:
+            return web.json_response(
+                {"error": "missing_slug", "detail": "provide run, slug, or brand"},
+                status=400,
+            )
+
+        src = _artifacts_dir_for(tool_id, {"brand": slug})
+        if src is None or not src.is_dir():
+            return web.json_response(
+                {"error": "session_not_found", "detail": f"no session folder for {slug!r}"},
+                status=404,
+            )
+        dest = _workspaces_root() / slug
+
+        def _copy() -> str:
+            import shutil
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(src, dest, dirs_exist_ok=True)
+            return str(dest)
+
+        loop = asyncio.get_running_loop()
+        try:
+            path = await loop.run_in_executor(None, _copy)
+        except Exception as exc:
+            logger.exception("/v1/tools/%s/promote copy failed", tool_id)
+            return web.json_response(
+                {"error": "copy_failed", "detail": str(exc)}, status=500
+            )
+        return web.json_response({"workspace_id": slug, "path": path})
+
+    # ------------------------------------------------------------------
+    # GET /v1/tools/{tool_id}/runs/{run_id}/transcript — replay a run's full
+    # execution log from the persisted Claude Code transcripts (main + each
+    # sub-agent), projected into the SAME lane events the live stream emits, so a
+    # refreshed/reopened (non-live) run can rebuild its agent logs. 200 → {events}.
+    # ------------------------------------------------------------------
+    async def _tool_run_transcript(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        run_id = request.match_info["run_id"]
+        record = _run_registry().get(run_id)
+        if record is None:
+            try:
+                from gateway.platforms import labs_store
+                record = labs_store.get_run(run_id)
+            except Exception:
+                record = None
+        if record is None:
+            return web.json_response(
+                {"error": "run_not_found", "detail": f"No run for id={run_id!r}"},
+                status=404,
+            )
+        csid = record.get("claude_session_id")
+        if not csid:
+            return web.json_response({"events": []})
+
+        from agent.claude_code_runtime import _SubagentTailer
+
+        def _collect() -> List[Dict[str, Any]]:
+            events: List[Dict[str, Any]] = []
+            tailer = _SubagentTailer(
+                session_id=csid, on_event=events.append, run_id=run_id,
+                include_main=True, include_main_text=True,
+            )
+            tailer._poll()  # one-shot full read (offsets empty → from the start)
+            return events
+
+        loop = asyncio.get_running_loop()
+        try:
+            events = await loop.run_in_executor(None, _collect)
+        except Exception as exc:
+            logger.exception("/v1/tools/%s/runs/%s/transcript failed",
+                             request.match_info.get("tool_id"), run_id)
+            return web.json_response({"events": [], "error": str(exc)}, status=500)
+        return web.json_response({"events": events})
+
+    # ------------------------------------------------------------------
+    # GET /v1/tools/{tool_id}/runs/latest?brand={brand} — recover the most
+    # recent run for a (tool, brand). Scans the (hydrated) run registry for runs
+    # whose brand input kebab-normalizes to brand_id (so "Acme Co" and
+    # "acme-co" match). "Most recent" = max(created). The /v1/runs/{id}/events
+    # stream is LIVE-ONLY (no replay), so a reloaded screen uses this to recover
+    # {run_id, session_id} and rebuild its transcript from the session messages
+    # + artifacts endpoints.
+    #   200 → {run_id, session_id, brand, created, completed}
+    #   404 → {error: "no_run_for_brand"} when none match.
+    # ------------------------------------------------------------------
+    async def _tool_runs_latest(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+
+        tool_id = request.match_info["tool_id"]
+        if not tool_id or "/" in tool_id or "\\" in tool_id or ".." in tool_id:
+            return web.json_response(
+                {"error": "invalid_tool_id", "detail": "tool_id must be a simple slug"},
+                status=400,
+            )
+
+        brand_id = _kebab(request.query.get("brand", ""))
+        if not brand_id:
+            return web.json_response(
+                {"error": "missing_brand", "detail": "'brand' query param required"},
+                status=400,
+            )
+
+        # Most-recent matching run by created timestamp. Compare both sides via
+        # _kebab so the stored brand input and the query param normalize alike.
+        best_id: Optional[str] = None
+        best_rec: Optional[Dict[str, Any]] = None
+        for rid, rec in _run_registry().items():
+            if rec.get("tool_id") != tool_id:
+                continue
+            if _kebab(rec.get("brand") or "") != brand_id:
+                continue
+            if best_rec is None or (rec.get("created") or 0) > (best_rec.get("created") or 0):
+                best_id, best_rec = rid, rec
+
+        if best_rec is None:
+            return web.json_response(
+                {"error": "no_run_for_brand",
+                 "detail": f"no run for tool={tool_id!r} brand={brand_id!r}"},
+                status=404,
+            )
+
+        return web.json_response({
+            "run_id": best_id,
+            "session_id": best_rec.get("session_id"),
+            "brand": best_rec.get("brand") or "",
+            "created": best_rec.get("created"),
+            "completed": bool(best_rec.get("completed")),
+        })
+
+    # ------------------------------------------------------------------
+    # GET /v1/runs/{run_id}/status — durable run liveness for the dashboard.
+    # Returns {"run_id", "status", "completed": bool, "live": bool} where
+    # ``live`` = an active SSE event stream exists for this run RIGHT NOW
+    # (run_id in adapter._run_streams). This is the SEAM the dashboard uses to
+    # avoid streaming a dead (restart-killed) run: a persisted-but-not-live run
+    # is resumed via /message rather than subscribed to /events.
+    #
+    # Backed by the persisted store so it survives restarts. Resolution order:
+    # in-memory registry (hydrated from SQLite on first use) → direct DB lookup
+    # → adapter._run_statuses (covers non-tool runs the dashboard may poll).
+    # Unknown run → 404. NOTE: api_server.py owns the bare GET /v1/runs/{run_id}
+    # route (registered first, so it wins); this companion /status path carries
+    # the pinned durable shape without touching that file.
+    # ------------------------------------------------------------------
+    async def _run_status(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+
+        run_id = request.match_info["run_id"]
+        record = _run_registry().get(run_id)
+        if record is None:
+            # Not in the hot cache — try a direct durable lookup (defensive; the
+            # registry is normally already hydrated, but a row could post-date it).
+            try:
+                from gateway.platforms import labs_store
+
+                record = labs_store.get_run(run_id)
+            except Exception:
+                record = None
+
+        live = run_id in adapter._run_streams
+
+        if record is not None:
+            status = record.get("status")
+            completed = bool(record.get("completed"))
+            if not status:
+                status = "completed" if completed else ("running" if live else "pending")
+            return web.json_response({
+                "run_id": run_id,
+                "status": status,
+                "completed": completed,
+                "live": live,
+            })
+
+        # Fall back to the adapter's run-status table for non-tool runs (Goal
+        # Mode, /v1/runs) the dashboard may also poll through this path.
+        st = adapter._run_statuses.get(run_id)
+        if st is not None:
+            status = st.get("status", "running")
+            return web.json_response({
+                "run_id": run_id,
+                "status": status,
+                "completed": status in {"completed", "failed", "cancelled"},
+                "live": live,
+            })
+
+        return web.json_response(
+            {"error": "run_not_found", "detail": f"No run for id={run_id!r}"},
+            status=404,
+        )
+
+    # ------------------------------------------------------------------
     # DELETE /v1/tools/{tool_id} — remove a user-built tool. Only a dir under
     # the writable tool root (/opt/data/skills) may be deleted; built-ins
     # under the read-only /opt/skills are refused with 403.
@@ -1317,16 +3456,59 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
     app.router.add_get("/v1/events", _events)
     app.router.add_get("/v1/tools", _tools)
     app.router.add_get("/v1/approvals", _approvals)
+    # Control screen: Overview usage rollup + Models roster/routing persistence.
+    app.router.add_get("/v1/usage", _usage)
+    app.router.add_get("/v1/model-config", _model_config_get)
+    app.router.add_put("/v1/model-config", _model_config_put)
+    # Planner: live Jira issues + Gmail inbox (fall back to mock when unconfigured).
+    app.router.add_get("/v1/integrations/jira/items", _jira_items)
+    app.router.add_get("/v1/integrations/gmail/messages", _gmail_messages)
     # Labs "UI Agent Builder" — static build/refine paths registered BEFORE the
     # parameterized {tool_id} routes so "build"/"refine" never match as an id.
     app.router.add_post("/v1/tools/build", _tool_build)
     app.router.add_post("/v1/tools/refine", _tool_refine)
+    # Literal routes before the generic {tool_id} routes so they aren't shadowed.
+    app.router.add_post("/v1/tools/workspace/create", _workspace_create)
+    app.router.add_get("/v1/tools/workspace/browse", _workspace_browse)
+    app.router.add_post("/v1/tools/workspace/rename", _workspace_rename)
+    app.router.add_post("/v1/tools/workspace/exec", _workspace_exec)
+    app.router.add_post("/v1/tools/workspace/exec/stop", _workspace_exec_stop)
     app.router.add_post("/v1/tools/{tool_id}/launch", _tool_launch)
+    app.router.add_post("/v1/tools/{tool_id}/promote", _tool_promote)
+    app.router.add_post("/v1/tools/{tool_id}/upload", _tool_upload)
+    # Brand Maker run screen: save generated images/videos into the brand vault.
+    app.router.add_post("/v1/tools/{tool_id}/brand-assets", _tool_brand_assets)
+    # Live Workbench: artifacts read-back (more-specific /raw first) + run-resume.
+    app.router.add_get("/v1/tools/{tool_id}/artifacts/raw", _tool_artifacts_raw)
+    app.router.add_get("/v1/tools/{tool_id}/artifacts", _tool_artifacts)
+    # Brand-scoped projects (read straight from disk, no run lookup). Register
+    # the deepest /projects/{brand_id}/artifacts/raw FIRST so it never shadows.
+    app.router.add_get(
+        "/v1/tools/{tool_id}/projects/{brand_id}/artifacts/raw",
+        _tool_project_artifacts_raw,
+    )
+    app.router.add_get(
+        "/v1/tools/{tool_id}/projects/{brand_id}/artifacts",
+        _tool_project_artifacts,
+    )
+    app.router.add_get("/v1/tools/{tool_id}/projects", _tool_projects)
+    # Deep-link resume: latest run for a (tool, brand) — registered before the
+    # bare {tool_id} GET (deeper path, so no shadowing either way).
+    app.router.add_get("/v1/tools/{tool_id}/runs/{run_id}/transcript", _tool_run_transcript)
+    app.router.add_get("/v1/tools/{tool_id}/runs/latest", _tool_runs_latest)
     app.router.add_get("/v1/tools/{tool_id}", _tool_get)
     app.router.add_delete("/v1/tools/{tool_id}", _tool_delete)
+    app.router.add_get("/v1/runs/{run_id}/status", _run_status)
+    app.router.add_post("/v1/runs/{run_id}/message", _run_message)
     app.router.add_post("/v1/goal", _goal)
     logger.debug(
         "dashboard data routes registered (/v1/tasks, /v1/memory, /v1/events, "
         "/v1/tools, /v1/approvals, /v1/tools/build, /v1/tools/refine, "
-        "/v1/tools/{id}, /v1/tools/{id}/launch, /v1/goal)"
+        "/v1/tools/{id}, /v1/tools/{id}/launch, /v1/tools/{id}/upload, "
+        "/v1/tools/{id}/brand-assets, "
+        "/v1/tools/{id}/artifacts, /v1/tools/{id}/artifacts/raw, "
+        "/v1/tools/{id}/projects, /v1/tools/{id}/projects/{brand}/artifacts, "
+        "/v1/tools/{id}/projects/{brand}/artifacts/raw, "
+        "/v1/tools/{id}/runs/latest, "
+        "/v1/runs/{id}/message, /v1/goal)"
     )

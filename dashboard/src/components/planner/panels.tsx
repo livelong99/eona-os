@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Video, Focus, Coffee, ListTodo, Mail, Pencil, Sparkles, Plus,
   RotateCw, ArrowRight, CircleCheck, Circle, Clock,
@@ -6,8 +6,9 @@ import {
 import {
   AGENDA, EVENT_META, TASKS, SOURCE_META, PRIORITY_META,
   MAILS, MAIL_TIER_META, JIRA_ITEMS, JIRA_STATUS_META,
-  type AgendaEvent, type Task, type TaskBucket, type TaskSource,
+  type AgendaEvent, type Task, type TaskBucket, type TaskSource, type JiraItem, type MailItem,
 } from "@/lib/planner";
+import { getJiraItems, getGmailMessages } from "@/lib/planner/engineClient";
 
 // shared panel shell
 export function Panel({ title, icon, action, children, className = "" }: {
@@ -157,14 +158,33 @@ function TaskRow({ t, onToggle }: { t: Task; onToggle: () => void }) {
 
 // ── Mail triage ──────────────────────────────────────────────────────────────
 export function MailPanel() {
+  // Live Gmail inbox from the engine; falls back to the mock list when Gmail
+  // OAuth isn't set up or the engine is unreachable.
+  const [mails, setMails] = useState<MailItem[]>(MAILS);
+  const [live, setLive] = useState(false);
+  useEffect(() => {
+    const ac = new AbortController();
+    getGmailMessages(ac.signal)
+      .then((res) => {
+        if (res.configured) {
+          setMails(res.messages);
+          setLive(true);
+        }
+      })
+      .catch(() => {
+        /* engine/Gmail unreachable → keep mock fallback */
+      });
+    return () => ac.abort();
+  }, []);
+
   return (
     <Panel
       title="Inbox triage"
       icon={<img src="https://cdn.simpleicons.org/gmail" alt="" className="h-4 w-4" />}
-      action={<span className="text-[11px] text-white/40">{MAILS.length} sorted</span>}
+      action={<span className="text-[11px] text-white/40">{live ? `${mails.length} live` : `${mails.length} sample`}</span>}
     >
       <div className="space-y-1.5">
-        {MAILS.map((m) => {
+        {mails.map((m) => {
           const meta = MAIL_TIER_META[m.tier];
           return (
             <div key={m.id} className="group rounded-xl border border-white/[0.07] bg-white/[0.02] p-3 transition-colors hover:bg-white/[0.05]">
@@ -193,13 +213,32 @@ export function JiraPanel() {
   const cols: { status: keyof typeof JIRA_STATUS_META }[] = [
     { status: "todo" }, { status: "inprogress" }, { status: "review" }, { status: "done" },
   ];
+  // Live Jira issues from the engine; falls back to the mock list when Jira
+  // isn't configured or the engine is unreachable.
+  const [items, setItems] = useState<JiraItem[]>(JIRA_ITEMS);
+  const [live, setLive] = useState(false);
+  useEffect(() => {
+    const ac = new AbortController();
+    getJiraItems(ac.signal)
+      .then((res) => {
+        if (res.configured) {
+          setItems(res.items);
+          setLive(true);
+        }
+      })
+      .catch(() => {
+        /* engine/Jira unreachable → keep mock fallback */
+      });
+    return () => ac.abort();
+  }, []);
+
   return (
     <Panel
       title="JIRA"
       icon={<img src="https://cdn.simpleicons.org/jira" alt="" className="h-4 w-4" />}
       action={
         <span className="inline-flex items-center gap-1.5 rounded-full bg-[#34d399]/12 px-2 py-0.5 text-[10.5px] font-medium text-[#34d399]">
-          <RotateCw className="h-3 w-3" /> synced 2m ago
+          <RotateCw className="h-3 w-3" /> {live ? "live" : "sample"}
         </span>
       }
     >
@@ -207,7 +246,7 @@ export function JiraPanel() {
       <div className="mb-3 grid grid-cols-4 gap-1.5">
         {cols.map(({ status }) => {
           const meta = JIRA_STATUS_META[status];
-          const count = JIRA_ITEMS.filter((j) => j.status === status).length;
+          const count = items.filter((j) => j.status === status).length;
           return (
             <div key={status} className="rounded-lg border border-white/[0.06] bg-white/[0.02] px-2 py-2 text-center">
               <p className="text-[15px] font-semibold tabular-nums text-white">{count}</p>
@@ -217,7 +256,7 @@ export function JiraPanel() {
         })}
       </div>
       <div className="space-y-1">
-        {JIRA_ITEMS.map((j) => {
+        {items.map((j) => {
           const meta = JIRA_STATUS_META[j.status];
           return (
             <div key={j.id} className="group flex items-center gap-2.5 rounded-lg px-2 py-1.5 transition-colors hover:bg-white/[0.04]">

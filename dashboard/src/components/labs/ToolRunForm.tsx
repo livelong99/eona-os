@@ -1,27 +1,38 @@
 import { useMemo, useState } from "react";
 import { Play, Loader2 } from "lucide-react";
 import type { ToolInput } from "@/lib/labs/toolsClient";
+import { uploadFiles } from "@/lib/labs/toolsClient";
+import { UploadDropzone } from "@/components/labs/UploadDropzone";
 
 interface ToolRunFormProps {
+  toolId: string;
   inputs: ToolInput[];
   busy?: boolean;
   onRun: (values: Record<string, unknown>) => void;
 }
 
+type Widget = "text" | "longtext" | "number" | "toggle" | "select" | "file" | "image";
+
 // Normalizes the manifest's free-form input type into a widget kind.
-function widgetFor(type: string): "text" | "longtext" | "number" | "toggle" | "select" {
-  const t = type.toLowerCase();
+function widgetFor(type: string): Widget {
+  const t = type.toLowerCase().replace(/\[\]$/, "");
   if (t === "longtext" || t === "textarea" || t === "multiline") return "longtext";
   if (t === "number" || t === "int" || t === "integer" || t === "float") return "number";
   if (t === "toggle" || t === "bool" || t === "boolean" || t === "checkbox") return "toggle";
   if (t === "select" || t === "enum" || t === "choice") return "select";
-  // image/file/url and unknowns fall back to a text field (engine takes a string).
+  if (t === "image" || t === "img" || t === "photo" || t === "picture") return "image";
+  if (t === "file" || t === "upload" || t === "document" || t === "doc") return "file";
+  // url and other unknowns fall back to a text field (engine takes a string).
   return "text";
 }
 
+// A manifest type whose raw string ends in "[]" accepts multiple files.
+const isMulti = (type: string) => /\[\]\s*$/.test(type);
+
 // ToolRunForm — a dynamic launch form built from a tool's `inputs[]`. Respects
-// each input's type, required flag, and select options. Submits a key→value map.
-export function ToolRunForm({ inputs, busy, onRun }: ToolRunFormProps) {
+// each input's type, required flag, and select options. File/image inputs are
+// uploaded immediately and submitted as arrays of engine-side paths.
+export function ToolRunForm({ toolId, inputs, busy, onRun }: ToolRunFormProps) {
   const [values, setValues] = useState<Record<string, unknown>>(() => {
     const seed: Record<string, unknown> = {};
     for (const input of inputs) {
@@ -30,22 +41,61 @@ export function ToolRunForm({ inputs, busy, onRun }: ToolRunFormProps) {
     return seed;
   });
 
+  // Per-input local file selections + upload state (kept out of `values`, which
+  // holds the submitted paths once an upload resolves).
+  const [files, setFiles] = useState<Record<string, File[]>>({});
+  const [uploading, setUploading] = useState<Record<string, boolean>>({});
+  const [errors, setErrors] = useState<Record<string, string | null>>({});
+
   const set = (id: string, value: unknown) =>
     setValues((prev) => ({ ...prev, [id]: value }));
+
+  // Replaces an input's selection and (re)uploads it, storing returned paths.
+  const handleFiles = async (input: ToolInput, next: File[]) => {
+    setFiles((prev) => ({ ...prev, [input.id]: next }));
+    setErrors((prev) => ({ ...prev, [input.id]: null }));
+    if (next.length === 0) {
+      set(input.id, []);
+      return;
+    }
+    setUploading((prev) => ({ ...prev, [input.id]: true }));
+    try {
+      const map = await uploadFiles(toolId, [{ inputId: input.id, files: next }]);
+      set(input.id, map[input.id] ?? []);
+    } catch (err) {
+      set(input.id, []);
+      setErrors((prev) => ({
+        ...prev,
+        [input.id]: err instanceof Error ? err.message : "Upload failed",
+      }));
+    } finally {
+      setUploading((prev) => ({ ...prev, [input.id]: false }));
+    }
+  };
+
+  const anyUploading = useMemo(
+    () => Object.values(uploading).some(Boolean),
+    [uploading],
+  );
 
   const missing = useMemo(
     () =>
       inputs.some((input) => {
         if (!input.required) return false;
+        const widget = widgetFor(input.type);
+        if (widget === "toggle") return false; // a toggle is always set
+        if (widget === "file" || widget === "image") {
+          const paths = values[input.id];
+          return !Array.isArray(paths) || paths.length === 0;
+        }
         const v = values[input.id];
-        if (widgetFor(input.type) === "toggle") return false; // a toggle is always set
         return v === undefined || v === null || String(v).trim() === "";
       }),
     [inputs, values],
   );
 
   const submit = () => {
-    if (busy || missing) return;
+    if (busy || missing || anyUploading) return;
     // Coerce numbers; drop empty optional fields so the engine sees a clean map.
     const payload: Record<string, unknown> = {};
     for (const input of inputs) {
@@ -57,6 +107,9 @@ export function ToolRunForm({ inputs, busy, onRun }: ToolRunFormProps) {
         payload[input.id] = Number.isNaN(n) ? raw : n;
       } else if (widget === "toggle") {
         payload[input.id] = Boolean(raw);
+      } else if (widget === "file" || widget === "image") {
+        if (!Array.isArray(raw) || raw.length === 0) continue;
+        payload[input.id] = raw;
       } else {
         if (raw === "" || raw === undefined) continue;
         payload[input.id] = raw;
@@ -158,11 +211,22 @@ export function ToolRunForm({ inputs, busy, onRun }: ToolRunFormProps) {
                 />
               </button>
             )}
+
+            {(widget === "file" || widget === "image") && (
+              <UploadDropzone
+                variant={widget}
+                multiple={isMulti(input.type)}
+                files={files[input.id] ?? []}
+                uploading={uploading[input.id]}
+                error={errors[input.id]}
+                onFiles={(next) => void handleFiles(input, next)}
+              />
+            )}
           </div>
         );
       })}
 
-      <RunButton busy={busy} disabled={missing} onClick={submit} />
+      <RunButton busy={busy} disabled={missing || anyUploading} onClick={submit} />
     </form>
   );
 }

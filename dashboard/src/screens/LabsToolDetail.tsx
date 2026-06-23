@@ -14,7 +14,7 @@ import { GlassPanel } from "@/components/ui/glass-panel";
 import { manifestToTool, FIELD_TYPE_META, type FieldType } from "@/lib/labs";
 import { TOOL_ICONS } from "@/components/labs/toolIcon";
 import { ToolRunForm } from "@/components/labs/ToolRunForm";
-import { RunConsole } from "@/components/labs/RunConsole";
+import { ProjectsGallery } from "@/components/labs/run/ProjectsGallery";
 import {
   getTool,
   runTool,
@@ -28,12 +28,21 @@ type Load =
   | { phase: "ready"; manifest: ToolManifest }
   | { phase: "error"; message: string };
 
-// The active run, if any — drives the RunConsole panel.
+// The launch lifecycle. On success we navigate to the dedicated run screen, so
+// there's no inline "running" phase here.
 type RunState =
   | { phase: "idle" }
   | { phase: "starting" }
-  | { phase: "running"; runId: string }
   | { phase: "error"; message: string };
+
+// kebab — lowercase, non-alphanumerics → "-", collapse repeats, trim edges.
+function kebab(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
 
 // LabsToolDetail — loads a tool's full manifest from the engine and renders its
 // workflow + I/O, a dynamic launch form, a live run console, and Delete.
@@ -71,11 +80,25 @@ export function LabsToolDetail() {
   }, [fetchTool]);
 
   const onRun = async (values: Record<string, unknown>) => {
-    if (!id) return;
+    if (!id || load.phase !== "ready") return;
+    const manifest = load.manifest;
     setRun({ phase: "starting" });
     try {
-      const { run_id } = await runTool(id, values);
-      setRun({ phase: "running", runId: run_id });
+      const { run_id, session_id } = await runTool(id, values);
+      // The project input becomes a kebab slug in the URL; run context rides in
+      // nav state. Swarm tools → the generic glass-box SwarmToolRun screen;
+      // legacy single-agent tools → the step-gated workbench run screen.
+      const brand = String(values.brand ?? values.project ?? values.name ?? "");
+      const brandId = kebab(brand) || "run";
+      if (manifest.swarm) {
+        navigate(`/labs/run/${manifest.id}/${brandId}`, {
+          state: { runId: run_id, name: brand, manifest },
+        });
+      } else {
+        navigate(`/labs/${manifest.id}/${brandId}`, {
+          state: { runId: run_id, sessionId: session_id, manifest, brand },
+        });
+      }
     } catch (err: unknown) {
       setRun({
         phase: "error",
@@ -187,7 +210,8 @@ export function LabsToolDetail() {
 
         <div className="mt-3 h-px w-full bg-white/10" />
 
-        {/* Body: spec (left) + run panel (right) */}
+        {/* Body: spec (left) + launch form (right). Launching navigates to the
+            dedicated step-gated run screen. */}
         <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6 sm:px-8">
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             {/* Spec column */}
@@ -256,6 +280,7 @@ export function LabsToolDetail() {
                 <SectionTitle icon={<FileInput className="h-4 w-4" />}>Run this tool</SectionTitle>
                 <div className="mt-4">
                   <ToolRunForm
+                    toolId={manifest.id}
                     inputs={inputs}
                     busy={run.phase === "starting"}
                     onRun={onRun}
@@ -268,15 +293,12 @@ export function LabsToolDetail() {
                   </div>
                 )}
               </div>
-
-              {run.phase === "running" && (
-                <RunConsole
-                  runId={run.runId}
-                  title="Tool run"
-                  className="h-[360px]"
-                />
-              )}
             </div>
+          </div>
+
+          {/* Existing projects (brands) — open one to review or continue it. */}
+          <div className="mt-8">
+            <ProjectsGallery toolId={manifest.id} steps={steps} swarm={manifest.swarm} />
           </div>
         </div>
       </GlassPanel>
