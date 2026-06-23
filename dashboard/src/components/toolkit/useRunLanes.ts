@@ -59,6 +59,8 @@ export function useRunLanes(
   const tidToLane = useRef<Map<string, string>>(new Map()); // Agent tid → lane key
   // True once the run reached a terminal event — stops the reconnect loop.
   const terminalRef = useRef(false);
+  // Guards against overlapping artifact polls (a slow refetch + the next tick).
+  const pollingRef = useRef(false);
   const [, forceTick] = useReducer((x: number) => x + 1, 0);
   const force = useCallback(() => forceTick(), []);
 
@@ -290,7 +292,9 @@ export function useRunLanes(
     if (!runId || !streaming) return;
     const id = setInterval(() => {
       if (typeof document !== "undefined" && document.hidden) return;
-      void refetch();
+      if (pollingRef.current) return; // coalesce: skip if a refetch is still in flight
+      pollingRef.current = true;
+      Promise.resolve(refetch()).finally(() => { pollingRef.current = false; });
     }, 2500);
     return () => clearInterval(id);
   }, [runId, streaming, refetch]);
