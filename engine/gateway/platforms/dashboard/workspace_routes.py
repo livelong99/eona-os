@@ -23,6 +23,62 @@ if TYPE_CHECKING:  # pragma: no cover
 
 logger = logging.getLogger(__name__)
 
+_GIT_UNIT = "\x1f"  # field separator for git log --pretty
+
+
+def _git_status_sync(ws: Path) -> Dict[str, Any]:
+    """Read-only git snapshot of a workspace folder (blocking; via executor)."""
+    import subprocess
+    git = os.environ.get("GIT_BIN", "git")
+
+    def run(*args: str, timeout: float = 15.0) -> "subprocess.CompletedProcess":
+        return subprocess.run([git, "-C", str(ws), *args], capture_output=True, text=True, timeout=timeout)
+
+    try:
+        if run("rev-parse", "--is-inside-work-tree").returncode != 0:
+            return {"is_repo": False}
+    except Exception:
+        return {"is_repo": False}
+
+    branch = run("rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "HEAD"
+    remote_p = run("remote", "get-url", "origin")
+    remote = remote_p.stdout.strip() if remote_p.returncode == 0 else None
+    dirty = len([ln for ln in run("status", "--porcelain").stdout.splitlines() if ln.strip()])
+
+    ahead = behind = None
+    upstream = run("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    has_upstream = upstream.returncode == 0
+    if has_upstream:
+        counts = run("rev-list", "--left-right", "--count", "@{u}...HEAD").stdout.strip().split()
+        if len(counts) == 2:
+            behind, ahead = int(counts[0]), int(counts[1])
+
+    commits: List[Dict[str, str]] = []
+    log = run("log", "-25", f"--pretty=format:%h{_GIT_UNIT}%s{_GIT_UNIT}%an{_GIT_UNIT}%ar")
+    for line in log.stdout.splitlines():
+        parts = line.split(_GIT_UNIT)
+        if len(parts) == 4:
+            commits.append({"hash": parts[0], "subject": parts[1], "author": parts[2], "date": parts[3]})
+
+    return {
+        "is_repo": True, "branch": branch, "remote": remote, "dirty": dirty,
+        "ahead": ahead, "behind": behind, "has_upstream": has_upstream, "commits": commits,
+    }
+
+
+def _git_push_sync(ws: Path) -> Dict[str, Any]:
+    """Push the workspace's current branch (user-initiated; blocking)."""
+    import subprocess
+    git = os.environ.get("GIT_BIN", "git")
+    try:
+        proc = subprocess.run([git, "-C", str(ws), "push"], capture_output=True, text=True, timeout=120)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "output": "git push timed out after 120s"}
+    except Exception as exc:
+        return {"ok": False, "output": str(exc)}
+    out = (proc.stdout + proc.stderr).strip()
+    return {"ok": proc.returncode == 0, "output": out[:2000] or ("pushed" if proc.returncode == 0 else "push failed")}
+
 
 def register(app: "Any", adapter: "Any") -> None:
     """Register the workspace tool routes on the api_server's aiohttp app."""
@@ -457,6 +513,39 @@ def register(app: "Any", adapter: "Any") -> None:
                 logger.warning("rename: could not update workspace.json for %s", slug, exc_info=True)
         return web.json_response({"ok": True, "slug": slug, "name": name})
 
+    # GET /v1/tools/workspace/git?slug=… — read-only branch + recent commits +
+    # ahead/behind/dirty status for the workspace folder. {is_repo:false} if not a repo.
+    async def _workspace_git(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        slug = _ad._kebab(request.query.get("slug") or "")
+        if not slug:
+            return web.json_response({"error": "invalid_request", "detail": "require slug"}, status=400)
+        ws = _ad._collection_root_for("workspace") / slug
+        if not (ws / _ad._WORKSPACE_MARKER).exists():
+            return web.json_response({"error": "not_a_workspace", "detail": "unknown workspace"}, status=404)
+        res = await asyncio.get_running_loop().run_in_executor(None, _git_status_sync, ws)
+        return web.json_response(res)
+
+    # POST /v1/tools/workspace/git/push — push the workspace's current branch.
+    # User-initiated (the agent never auto-pushes). Body {slug}.
+    async def _workspace_git_push(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_json"}, status=400)
+        body = body if isinstance(body, dict) else {}
+        slug = _ad._kebab(body.get("slug") if isinstance(body.get("slug"), str) else "")
+        if not slug:
+            return web.json_response({"error": "invalid_request", "detail": "require slug"}, status=400)
+        ws = _ad._collection_root_for("workspace") / slug
+        if not (ws / _ad._WORKSPACE_MARKER).exists():
+            return web.json_response({"error": "not_a_workspace", "detail": "unknown workspace"}, status=404)
+        res = await asyncio.get_running_loop().run_in_executor(None, _git_push_sync, ws)
+        return web.json_response(res, status=(200 if res.get("ok") else 502))
+
     # Literal routes before the generic {tool_id} routes so they aren't shadowed.
     app.router.add_post("/v1/tools/workspace/create", _workspace_create)
     app.router.add_post("/v1/tools/workspace/resume", _workspace_resume)
@@ -464,3 +553,5 @@ def register(app: "Any", adapter: "Any") -> None:
     app.router.add_post("/v1/tools/workspace/rename", _workspace_rename)
     app.router.add_post("/v1/tools/workspace/exec", _workspace_exec)
     app.router.add_post("/v1/tools/workspace/exec/stop", _workspace_exec_stop)
+    app.router.add_get("/v1/tools/workspace/git", _workspace_git)
+    app.router.add_post("/v1/tools/workspace/git/push", _workspace_git_push)

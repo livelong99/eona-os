@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import {
   ArrowLeft, Send, Loader, FolderGit2, FileText, MessageCircleQuestion,
-  Check, RotateCcw, Play, ListTree, Terminal,
+  Check, RotateCcw, Play, ListTree, Terminal, GitBranch,
 } from "lucide-react";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { ExecutionConsole, ALL_AGENTS } from "@/components/brainstorm/ExecutionConsole";
@@ -15,6 +15,7 @@ import { AutoManualToggle } from "@/components/workspace/AutoManualToggle";
 import { StoryReviewGate } from "@/components/workspace/StoryReviewGate";
 import { FeatureBar } from "@/components/workspace/FeatureBar";
 import { LogsPanel } from "@/components/workspace/LogsPanel";
+import { GitModal } from "@/components/workspace/GitModal";
 import { useWorkspaceRun } from "@/components/workspace/useWorkspaceRun";
 import {
   getLatestRun,
@@ -81,6 +82,7 @@ export function WorkspaceDetail() {
   const [view, setView] = useState<"design" | "epics" | "qna">("design");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [showLogs, setShowLogs] = useState(false);
+  const [showGit, setShowGit] = useState(false);
   const [resuming, setResuming] = useState(false);
 
   // Relaunch the orchestrator against the existing folder when there's no live
@@ -189,13 +191,21 @@ export function WorkspaceDetail() {
             </div>
             <button
               type="button"
+              onClick={() => setShowGit(true)}
+              title="Branch, commits & push"
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 px-2.5 py-1 text-[12px] font-medium text-white/60 transition-colors hover:bg-white/[0.06] cursor-pointer"
+            >
+              <GitBranch className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Git</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setShowLogs((v) => !v)}
               title="Build · Run · Test"
               className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[12px] font-medium transition-colors cursor-pointer ${
                 showLogs ? "border-white/30 bg-white/10 text-white" : "border-white/10 text-white/60 hover:bg-white/[0.06]"
               }`}
             >
-              <Terminal className="h-3.5 w-3.5" /> Terminal
+              <Terminal className="h-3.5 w-3.5" /> <span className="hidden sm:inline">Terminal</span>
             </button>
           </div>
         </div>
@@ -410,6 +420,8 @@ export function WorkspaceDetail() {
             <LogsPanel slug={slug} scripts={state?.scripts} onClose={() => setShowLogs(false)} />
           </GlassPanel>
         )}
+
+        {showGit && <GitModal slug={slug} name={name} onClose={() => setShowGit(false)} />}
       </div>
     </section>
   );

@@ -696,3 +696,31 @@ async def test_workspace_resume(tmp_path, monkeypatch):
         assert data["workspace_id"] == "deck" and data["run_id"].startswith("run_")
         rec = d._run_registry()[data["run_id"]]
         assert rec["run_cwd"] == str(ws) and rec["brand"] == "Deck Heads" and rec["tool_id"] == "workspace"
+
+
+@pytest.mark.asyncio
+async def test_workspace_git_status(tmp_path, monkeypatch):
+    """git endpoint reports branch + commits for a repo workspace; 404 unknown."""
+    import os
+    import subprocess
+    from gateway.platforms import api_dashboard as d
+
+    monkeypatch.setenv("HERMES_WORKSPACES_ROOT", str(tmp_path / "10_Projects"))
+    ws = tmp_path / "10_Projects" / "repo"
+    ws.mkdir(parents=True)
+    d._write_workspace_marker(ws, {"name": "Repo", "slug": "repo"})
+    env = {**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@x", "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@x"}
+    for args in (["init", "-q"], ["add", "-A"], ["commit", "-qm", "first commit", "--allow-empty"]):
+        subprocess.run(["git", "-C", str(ws), *args], check=True, env=env, capture_output=True)
+
+    adapter = _make_adapter()
+    app = _create_dashboard_app(adapter)
+    async with TestClient(TestServer(app)) as client:
+        assert (await client.get("/v1/tools/workspace/git?slug=nope")).status == 404
+        r = await client.get("/v1/tools/workspace/git?slug=repo")
+        assert r.status == 200
+        data = await r.json()
+        assert data["is_repo"] is True
+        assert data["branch"]  # some branch name
+        assert any("first commit" == c["subject"] for c in data["commits"])
+        assert data["has_upstream"] is False  # no remote in the test repo

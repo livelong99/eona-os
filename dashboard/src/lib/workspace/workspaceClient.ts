@@ -259,6 +259,51 @@ export function sendAnswers(
   return sendRunMessage(runId, text, opts);
 }
 
+// ── Git (read-only status + user-initiated push) ─────────────────────────────
+
+export interface GitCommit {
+  hash: string;
+  subject: string;
+  author: string;
+  date: string;
+}
+export interface GitStatus {
+  is_repo: boolean;
+  branch?: string;
+  remote?: string | null;
+  dirty?: number;
+  ahead?: number | null;
+  behind?: number | null;
+  has_upstream?: boolean;
+  commits?: GitCommit[];
+}
+
+/** Branch + recent commits + ahead/behind/dirty for the workspace folder. */
+export async function fetchGitStatus(slug: string, signal?: AbortSignal): Promise<GitStatus> {
+  const res = await fetch(
+    `${API_BASE}/v1/tools/${WORKSPACE_TOOL_ID}/git?slug=${encodeURIComponent(slug)}`,
+    { signal, cache: "no-store" },
+  );
+  if (!res.ok) throw new Error(`git status failed: ${res.status}`);
+  return (res.json()) as Promise<GitStatus>;
+}
+
+/** Push the workspace's current branch (user-initiated). */
+export async function pushWorkspace(slug: string): Promise<{ ok: boolean; output: string }> {
+  const res = await fetch(`${API_BASE}/v1/tools/${WORKSPACE_TOOL_ID}/git/push`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug }),
+  });
+  let data: { ok?: boolean; output?: string; detail?: string } = {};
+  try {
+    data = (await res.json()) as typeof data;
+  } catch {
+    /* ignore */
+  }
+  return { ok: Boolean(data.ok), output: data.output || data.detail || `${res.status}` };
+}
+
 // ── Rename (display name only; folder/slug unchanged) ────────────────────────
 
 export async function renameWorkspace(slug: string, name: string): Promise<void> {
