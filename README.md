@@ -5,11 +5,14 @@
 
 <div align="center">
 
-<img src="resources/app-icons/light-theme/home_orb.jpeg" alt="Agent Home" width="120" style="border-radius:24px" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="resources/branding/Brands/Eona/mark-dark.jpeg" />
+  <img src="resources/branding/Brands/Eona/icon-light.jpeg" alt="Eona OS" width="132" style="border-radius:26px" />
+</picture>
 
-# Agent Home
+# Eona OS
 
-**A self-hosted mission control where Claude Code and a team of AI agents work together — over your own Obsidian vault, on your own machine, with no per-token cost.**
+**An endless, always-on intelligence for your local AI agents — Claude Code and a team of agents working together over your own Obsidian vault, on your own machine, with no per-token cost.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg?style=flat-square)](LICENSE)
 [![Built on Hermes Agent](https://img.shields.io/badge/built%20on-Hermes%20Agent-7c5cff.svg?style=flat-square)](https://github.com/NousResearch/hermes-agent)
@@ -25,13 +28,13 @@
 
 ---
 
-## What is Agent Home?
+## What is Eona OS?
 
-Agent Home is a **local-first orchestration platform for AI agents**. It puts a polished mission-control dashboard in front of a forked [Hermes Agent](https://github.com/NousResearch/hermes-agent) engine, and delegates the actual work to the **`claude` CLI using your Claude Code subscription** — so there's no per-token API bill. Multiple named agents plan, research, write, and ship in parallel, all sharing **one Obsidian vault as their long-term memory**.
+Eona OS is a **local-first orchestration platform for AI agents**. It puts a polished mission-control dashboard in front of a forked [Hermes Agent](https://github.com/NousResearch/hermes-agent) engine, and delegates the actual work to the **`claude` CLI using your Claude Code subscription** — so there's no per-token API bill. Multiple named agents plan, research, write, and ship in parallel, all sharing **one Obsidian vault as their long-term memory**.
 
 Everything runs in Docker on `127.0.0.1`. Your notes, your code, and your conversations never leave your machine unless you explicitly send them somewhere.
 
-> **Why it exists:** commercial agent IDEs are cloud-bound, metered per token, and own your context. Agent Home is the opposite — self-hosted, subscription-priced, and built on permissive open source you can read, fork, and extend.
+> **Why it exists:** commercial agent IDEs are cloud-bound, metered per token, and own your context. Eona OS is the opposite — self-hosted, subscription-priced, and built on permissive open source you can read, fork, and extend.
 
 ### Why you might like it
 
@@ -118,7 +121,7 @@ A five-layer, local-first stack. Full detail in [`docs/architecture.md`](docs/ar
 ```bash
 # 1. Clone
 git clone https://github.com/livelong99/eona-os.git
-cd agent-home
+cd eona-os
 
 # 2. Seed config + secrets and build the stack
 scripts/install.sh
@@ -205,7 +208,7 @@ Good first contributions: new `SKILL.md` tools, dashboard polish, docs, and plat
 
 ## 🔒 Security
 
-Found a vulnerability? **Please don't open a public issue** — see [SECURITY.md](SECURITY.md) for private disclosure. Agent Home is local-first and ships secrets-free; never commit `~/.hermes/.env` or put credentials in your vault.
+Found a vulnerability? **Please don't open a public issue** — see [SECURITY.md](SECURITY.md) for private disclosure. Eona OS is local-first and ships secrets-free; never commit `~/.hermes/.env` or put credentials in your vault.
 
 ---
 
@@ -239,7 +242,7 @@ macOS (Apple Silicon) is the primary target. Linux and Windows (WSL2) work via D
 
 ## 📜 License & Acknowledgements
 
-Agent Home is released under the **[MIT License](LICENSE)** — © 2026 Vaibhav Chaudhary.
+Eona OS is released under the **[MIT License](LICENSE)** — © 2026 Vaibhav Chaudhary.
 
 It stands on the shoulders of excellent open source. Full attributions are in [`NOTICE`](NOTICE); the highlights:
 

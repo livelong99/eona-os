@@ -1,6 +1,6 @@
-# Contributing to Agent Home
+# Contributing to Eona OS
 
-First off — thank you. Agent Home is built to be forked, extended, and improved, and contributions of every size are welcome: code, docs, new skills, bug reports, and ideas.
+First off — thank you. Eona OS is built to be forked, extended, and improved, and contributions of every size are welcome: code, docs, new skills, bug reports, and ideas.
 
 By participating you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md).
 
@@ -20,7 +20,7 @@ If your change is large or architectural, please open an issue to discuss it **b
 
 ```bash
 git clone https://github.com/livelong99/eona-os.git
-cd agent-home
+cd eona-os
 
 # Dashboard (Vite + React)
 cd dashboard

@@ -1,4 +1,4 @@
-// QnAView — the shared clarifying-questions panel for every Agent OS tool.
+// QnAView — the shared clarifying-questions panel for every Eona OS tool.
 // Answered questions show resolved; open ones get an answer box. Submitting sends
 // the answers back to the swarm via /message so it can refine and continue.
 // The QnAQuestion shape is the shared qna.json contract (engine: tool_qna schema).

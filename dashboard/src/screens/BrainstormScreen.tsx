@@ -66,7 +66,7 @@ export function BrainstormScreen() {
               </span>
               <div>
                 <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/40">
-                  Agent OS
+                  Eona OS
                 </p>
                 <h1 className="text-2xl font-semibold tracking-tight text-white">Brainstorm</h1>
               </div>

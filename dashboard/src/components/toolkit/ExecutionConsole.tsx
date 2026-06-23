@@ -1,7 +1,7 @@
 // ExecutionConsole — the glass-box view of a tool's agent swarm. One panel per
 // running agent (the orchestrator + each spawned specialist), each showing its
 // live thinking, response prose, and tool activity, so the user watches the
-// complete execution unfold. Shared by every Agent OS tool.
+// complete execution unfold. Shared by every Eona OS tool.
 
 import { useRef, useEffect } from "react";
 import {

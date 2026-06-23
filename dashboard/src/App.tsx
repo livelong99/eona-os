@@ -27,7 +27,7 @@ const ControlScreen = lazy(() => named(import("@/screens/ControlScreen"), "Contr
 const IntegrationsScreen = lazy(() => named(import("@/screens/IntegrationsScreen"), "IntegrationsScreen"));
 const PlannerScreen = lazy(() => named(import("@/screens/PlannerScreen"), "PlannerScreen"));
 
-// Top deck icons — custom Agent OS app icons (one per page). Each maps to a
+// Top deck icons — custom Eona OS app icons (one per page). Each maps to a
 // route. Light-theme set lives in public/icons/light as full-bleed square
 // images (light background); the dock rounds the corners in CSS at render time.
 const baseIcons: (Omit<DockIcon, "active" | "onClick"> & { route: string })[] = [
@@ -51,7 +51,7 @@ const QUIET_BG_SPEED = HOME_BG_SPEED * 0.1;
 const RAY_COLOR_1 = "#7C5CFF";
 const RAY_COLOR_2 = "#4F8CFF";
 
-// Agent OS — mockup shell. Persistent: SideRays background + top glass dock.
+// Eona OS — mockup shell. Persistent: SideRays background + top glass dock.
 // Routes swap the active screen; the dock drives navigation.
 function App() {
   const location = useLocation();

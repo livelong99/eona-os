@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.0.0] - 2026-06-24
 
 ### Added
-- Initial public release of **Agent Home**.
+- Initial public release of **Eona OS**.
 - Mission-control dashboard (Vite 6 · React 19 · three.js) with eight surfaces:
   Home, Workspace, Brainstorm, Labs, Memory, Control, Integrations, Planner.
 - Forked Hermes Agent engine exposing an OpenAI-compatible API on `:8642`.

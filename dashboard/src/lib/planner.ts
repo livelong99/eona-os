@@ -24,7 +24,7 @@ export const EVENT_META: Record<EventKind, { color: string; label: string }> = {
 };
 
 export const AGENDA: AgendaEvent[] = [
-  { id: "e1", time: "09:00", end: "09:30", title: "Daily standup", kind: "meeting", detail: "Agent OS squad · Google Meet", source: "Google Calendar" },
+  { id: "e1", time: "09:00", end: "09:30", title: "Daily standup", kind: "meeting", detail: "Eona OS squad · Google Meet", source: "Google Calendar" },
   { id: "e2", time: "09:30", end: "11:30", title: "Deep work — Memory sphere", kind: "focus", detail: "Auto-scheduled around your peak focus", source: "Agent" },
   { id: "e3", time: "11:30", end: "12:00", title: "Triage inbox", kind: "task", detail: "6 action emails queued", source: "Agent" },
   { id: "e4", time: "12:00", end: "13:00", title: "Lunch", kind: "break" },

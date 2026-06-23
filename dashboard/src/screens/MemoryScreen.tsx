@@ -122,7 +122,7 @@ export function MemoryScreen() {
               </span>
               <div>
                 <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/40">
-                  Agent OS
+                  Eona OS
                 </p>
                 <h1 className="text-xl font-semibold tracking-tight text-white">Memory</h1>
               </div>

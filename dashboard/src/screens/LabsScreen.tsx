@@ -105,7 +105,7 @@ export function LabsScreen() {
             </span>
             <div>
               <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/40">
-                Agent OS
+                Eona OS
               </p>
               <h1 className="text-2xl font-semibold tracking-tight text-white">Labs</h1>
             </div>

@@ -1,6 +1,6 @@
 # Security Policy
 
-Agent Home is **local-first**: every service binds to `127.0.0.1`, no secrets are committed to the repository, and the only credential required is your own Claude subscription token. Still, security issues happen — and we want to hear about them.
+Eona OS is **local-first**: every service binds to `127.0.0.1`, no secrets are committed to the repository, and the only credential required is your own Claude subscription token. Still, security issues happen — and we want to hear about them.
 
 ## Reporting a vulnerability
 
@@ -42,4 +42,4 @@ Out of scope:
 - Rotate `API_SERVER_KEY` and `CLAUDE_BRIDGE_TOKEN` if you suspect exposure (`scripts/install.sh` regenerates missing tokens).
 - Treat the vault as sensitive — it's the agents' shared memory.
 
-Thank you for helping keep Agent Home and its users safe.
+Thank you for helping keep Eona OS and its users safe.

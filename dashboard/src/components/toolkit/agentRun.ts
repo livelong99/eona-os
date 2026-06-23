@@ -1,5 +1,5 @@
 // toolkit/agentRun — shared primitives for the glass-box, swarm-aware run
-// experience used by every Agent OS tool (Brainstorm, Workspace, Brand Maker,
+// experience used by every Eona OS tool (Brainstorm, Workspace, Brand Maker,
 // and anything the Tool Forge creates). The brainstorm/workspace hooks predate
 // this and re-export the types from here so there is a single source of truth.
 

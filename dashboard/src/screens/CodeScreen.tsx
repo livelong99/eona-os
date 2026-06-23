@@ -76,7 +76,7 @@ export function CodeScreen() {
         <GlassPanel className="h-full w-full">
           <header className="flex flex-wrap items-center gap-4 px-6 py-5 sm:px-8">
             <div className="mr-auto">
-              <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/40">Agent OS</p>
+              <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/40">Eona OS</p>
               <h1 className="mt-1 text-2xl font-semibold tracking-tight text-white">Workspaces</h1>
               <p className="mt-1 text-sm text-white/45">
                 {projects.length} {projects.length === 1 ? "workspace" : "workspaces"}

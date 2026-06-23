@@ -100,7 +100,7 @@ export function IntegrationsScreen() {
                 <Blocks className="h-5 w-5 text-[#a78bfa]" />
               </span>
               <div>
-                <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/40">Agent OS</p>
+                <p className="text-[11px] font-medium uppercase tracking-[0.22em] text-white/40">Eona OS</p>
                 <h1 className="text-2xl font-semibold tracking-tight text-white">Integrations</h1>
               </div>
             </div>

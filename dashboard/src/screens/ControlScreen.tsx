@@ -25,7 +25,7 @@ export function ControlScreen() {
                 <SlidersHorizontal className="h-5 w-5 text-[#a78bfa]" />
               </span>
               <div>
-                <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-white/40">Agent OS</p>
+                <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-white/40">Eona OS</p>
                 <p className="text-[14px] font-semibold tracking-tight text-white">Control</p>
               </div>
             </div>
