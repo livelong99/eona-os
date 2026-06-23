@@ -236,7 +236,8 @@ function OutputView({
     let live = true;
     fetchText(sel.relpath).then((t) => live && setText(t));
     return () => { live = false; };
-  }, [sel?.relpath, isMd, fetchText]);
+    // sel.mtime so a live in-place rewrite (same path) re-fetches the content.
+  }, [sel?.relpath, sel?.mtime, isMd, fetchText]);
 
   if (files.length === 0) {
     return <p className="py-10 text-center text-[12.5px] text-white/40">Artifacts appear here as the swarm produces them.</p>;

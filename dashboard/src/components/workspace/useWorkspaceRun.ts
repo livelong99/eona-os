@@ -224,6 +224,11 @@ export function useWorkspaceRun(
     if (!runId) return;
     let cancelled = false;
     const controller = new AbortController();
+    // Reset lane state when the run changes so a relaunch doesn't show ghost
+    // lanes/events from the previous run.
+    lanesRef.current = new Map();
+    taskLabels.current = new Map();
+    tidToLane.current = new Map();
     ensureLane(MAIN_LANE_ID);
     force();
     void refetch();
@@ -254,7 +259,10 @@ export function useWorkspaceRun(
 
   useEffect(() => {
     if (!runId || !streaming) return;
-    const id = setInterval(() => void refetch(), 2500);
+    const id = setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      void refetch();
+    }, 2500);
     return () => clearInterval(id);
   }, [runId, streaming, refetch]);
 

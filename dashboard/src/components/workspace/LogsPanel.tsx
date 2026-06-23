@@ -46,8 +46,14 @@ export function LogsPanel({ slug, scripts, autoStart, onClose }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoStart]);
 
+  // Cap retained lines to a ring buffer so a chatty/long-running script (e.g. a
+  // dev server) can't grow the array unbounded and jank the UI.
+  const MAX_LINES = 2000;
   const push = (text: string, tone: LogEntry["tone"] = "out") =>
-    setLines((prev) => [...prev, { text, tone }]);
+    setLines((prev) => {
+      const next = [...prev, { text, tone }];
+      return next.length > MAX_LINES ? next.slice(next.length - MAX_LINES) : next;
+    });
 
   const start = async (kind: ScriptKind) => {
     if (running) return;

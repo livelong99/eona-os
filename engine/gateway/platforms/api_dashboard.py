@@ -582,9 +582,20 @@ def _ingest_workspace(source_type: str, source_ref: str, dest: Path) -> None:
         src = Path(os.path.expanduser((source_ref or "").strip()))
         if not src.is_dir():
             raise ValueError(f"folder source not found: {src}")
-        # Skip heavy/VCS dirs so the copy is fast and clean.
+        # Containment: only ingest folders inside the browsable root (the mounted
+        # vault) — never an arbitrary host path like /opt/data or /etc, which the
+        # raw API would otherwise copy into a servable workspace.
+        broot = _browse_root().resolve()
+        try:
+            contained = src.resolve().is_relative_to(broot)
+        except Exception:
+            contained = False
+        if not contained:
+            raise ValueError(f"folder source must be inside the browsable root ({broot})")
+        # Skip heavy/VCS dirs so the copy is fast and clean. symlinks=True copies
+        # links as-is (does NOT follow them out of the tree → no exfiltration).
         ignore = shutil.ignore_patterns(".git", "node_modules", "dist", "build", ".venv", "__pycache__")
-        shutil.copytree(src, dest, dirs_exist_ok=True, ignore=ignore)
+        shutil.copytree(src, dest, dirs_exist_ok=True, ignore=ignore, symlinks=True)
         return
 
     if source_type == "brainstorm":
@@ -2998,10 +3009,20 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
         if not (ws / _WORKSPACE_MARKER).exists():
             return web.json_response({"error": "not_a_workspace", "detail": "unknown workspace"}, status=404)
         script_path = ws / "scripts" / f"{script}.sh"
-        if not script_path.is_file():
+        # Symlink/traversal guard: a malicious ingested repo could ship
+        # scripts/{kind}.sh as a symlink to an arbitrary host file. Reject any
+        # symlink or a path that resolves outside the workspace's scripts/ dir.
+        try:
+            resolved = script_path.resolve()
+            safe = (not script_path.is_symlink()
+                    and resolved.is_relative_to((ws / "scripts").resolve())
+                    and resolved.is_file())
+        except Exception:
+            safe = False
+        if not safe:
             return web.json_response(
                 {"error": "script_missing",
-                 "detail": f"scripts/{script}.sh not found — provisioning may not have authored it yet"},
+                 "detail": f"scripts/{script}.sh not found (or not a regular file in this workspace)"},
                 status=404,
             )
 
@@ -3036,14 +3057,39 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
             await resp.write(f"data: {json.dumps(obj)}\n\n".encode())
 
         await _send({"type": "start", "slug": slug, "script": script})
+        # Output cap (prevent a chatty/runaway script flooding the client) and a
+        # wall-clock cap for build/test (a hung build leaks otherwise). `run` is
+        # long-lived (dev servers) so it is not time-capped — the stream/stop kills it.
+        import time as _time
+        max_lines = int(os.environ.get("HERMES_EXEC_MAX_LINES", "50000"))
+        deadline = None if script == "run" else _time.monotonic() + int(os.environ.get("HERMES_EXEC_TIMEOUT", "1800"))
+        sent = 0
+        truncated = False
         try:
             stream = proc.stdout
             assert stream is not None
             while True:
-                line = await stream.readline()
+                if deadline is not None:
+                    remaining = deadline - _time.monotonic()
+                    if remaining <= 0:
+                        await _send({"type": "line", "text": "— timed out (build/test exceeded the time limit)"})
+                        break
+                    try:
+                        line = await asyncio.wait_for(stream.readline(), timeout=remaining)
+                    except asyncio.TimeoutError:
+                        await _send({"type": "line", "text": "— timed out (build/test exceeded the time limit)"})
+                        break
+                else:
+                    line = await stream.readline()
                 if not line:
                     break
-                await _send({"type": "line", "text": line.decode("utf-8", "replace").rstrip("\n")})
+                if sent < max_lines:
+                    await _send({"type": "line", "text": line.decode("utf-8", "replace").rstrip("\n")})
+                    sent += 1
+                elif not truncated:
+                    truncated = True
+                    await _send({"type": "line", "text": "— output truncated (too many lines); still running…"})
+                # past the cap: keep draining (so the pipe doesn't block the proc) but don't forward
             code = await proc.wait()
             await _send({"type": "exit", "code": code})
         except (asyncio.CancelledError, ConnectionResetError):
@@ -3056,7 +3102,21 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
                 pass
         finally:
             # Closing the stream (or a crash) kills the script tree so nothing leaks.
-            _kill_proc_group(proc)
+            _kill_proc_group(proc)  # SIGTERM the group
+            # Escalate to SIGKILL shortly if it ignores SIGTERM (detached so this
+            # finally — which may run under cancellation — never blocks/awaits).
+            def _escalate(p: Any) -> None:
+                import os as _os
+                import signal as _sig
+                try:
+                    if p.returncode is None:
+                        _os.killpg(_os.getpgid(p.pid), _sig.SIGKILL)
+                except Exception:
+                    pass
+            try:
+                asyncio.get_running_loop().call_later(3.0, _escalate, proc)
+            except Exception:
+                pass
             if _WORKSPACE_EXEC_PROCS.get(key) is proc:
                 _WORKSPACE_EXEC_PROCS.pop(key, None)
             try:
@@ -3119,6 +3179,9 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
         body = body if isinstance(body, dict) else {}
         slug = _kebab(body.get("slug") if isinstance(body.get("slug"), str) else "")
         script = body.get("script") if isinstance(body.get("script"), str) else ""
+        if script not in _WORKSPACE_SCRIPTS:
+            return web.json_response(
+                {"error": "invalid_request", "detail": "script must be build|run|test"}, status=400)
         proc = _WORKSPACE_EXEC_PROCS.get(f"{slug}:{script}")
         if proc is None or proc.returncode is not None:
             return web.json_response({"stopped": False, "detail": "not running"})
