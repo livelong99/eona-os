@@ -40,3 +40,13 @@ voice-dataset/
 dashboard-legacy-nextjs/
 # Mockup scaffold promoted into dashboard/
 mockup/
+
+# Local-only extras quarantined out of the public repo (models, datasets, personal media, scratch)
+/_local/
+*.sqlite
+*.sqlite3
+*.ckpt
+*.tfevents.*
+*.pt
+*.pth
+*.gguf
