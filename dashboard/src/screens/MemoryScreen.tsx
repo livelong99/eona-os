@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Brain, Orbit, X, RotateCw, AlertTriangle, Sparkles, Spline } from "lucide-react";
 import { GlassPanel } from "@/components/ui/glass-panel";
-import MemorySphere from "@/components/memory/MemorySphere";
 import { MemorySidebar } from "@/components/memory/MemorySidebar";
 import { NodeDetail } from "@/components/memory/NodeDetail";
 import { projectColor } from "@/lib/memory";
@@ -11,6 +10,11 @@ import {
   type MemoryGraph,
   type SearchResponse,
 } from "@/lib/memory/engineClient";
+
+// MemorySphere renders the 3D graph via three.js (~498kB). Lazy-load it so three
+// stays off the eager chunk — the screen's own "Loading knowledge graph…" skeleton
+// already covers the gap until the graph (and now the chunk) is ready.
+const MemorySphere = lazy(() => import("@/components/memory/MemorySphere"));
 
 // MemoryScreen — a 3D sphere of the *live* Obsidian vault (left: search + filters),
 // with a node-detail card overlaying the sphere when a note is selected. The graph
@@ -256,18 +260,21 @@ export function MemoryScreen() {
               </div>
             )}
 
-            {/* the sphere — only mounts once a graph is present */}
+            {/* the sphere — only mounts once a graph is present; three.js streams
+                in lazily, so the screen's loading skeleton (above) covers the gap */}
             {graph && !graphError && (
-              <MemorySphere
-                nodes={graph.nodes}
-                links={graph.links}
-                softLinks={graph.softLinks}
-                showSoftEdges={showSoftEdges}
-                query={query}
-                matchIds={matchIds}
-                selectedId={selected}
-                onSelect={setSelected}
-              />
+              <Suspense fallback={null}>
+                <MemorySphere
+                  nodes={graph.nodes}
+                  links={graph.links}
+                  softLinks={graph.softLinks}
+                  showSoftEdges={showSoftEdges}
+                  query={query}
+                  matchIds={matchIds}
+                  selectedId={selected}
+                  onSelect={setSelected}
+                />
+              </Suspense>
             )}
 
             {selected && (

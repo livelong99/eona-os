@@ -1,7 +1,24 @@
+import { lazy, Suspense } from "react";
 import { GlassChatBar } from "@/components/ui/glass-chat-bar";
-import AuroraOrb from "@/components/ui/AuroraOrb";
 import { GlassCircle } from "@/components/ui/glass-circle";
 import { useVoiceAgent, orbFor, type VoiceState } from "@/lib/voice/useVoiceAgent";
+
+// AuroraOrb pulls in all of three.js (~498kB). It's a decorative centerpiece on
+// the default landing route, so lazy-load it: Home paints and becomes interactive
+// first, then three.js streams in as its own chunk and the orb swaps in.
+const AuroraOrb = lazy(() => import("@/components/ui/AuroraOrb"));
+
+// Lightweight stand-in matching the orb's footprint while three.js loads — a soft
+// gradient blob so the layout doesn't shift and there's no empty hole.
+function OrbPlaceholder({ size }: { size: number }) {
+  return (
+    <div
+      aria-hidden
+      style={{ width: size, height: size }}
+      className="rounded-full bg-[radial-gradient(circle_at_50%_40%,rgba(82,39,255,0.35),rgba(34,211,168,0.12)_55%,transparent_72%)] blur-[2px] animate-pulse"
+    />
+  );
+}
 
 const STATE_META: Record<VoiceState, { label: string; color: string }> = {
   idle: { label: "Idle", color: "#8a8fa3" },
@@ -30,7 +47,9 @@ export function HomeScreen() {
           className="rounded-full transition-transform duration-200 hover:scale-[1.02] cursor-pointer focus:outline-none focus-visible:ring-2 focus-visible:ring-[#5227FF]/60"
         >
           <GlassCircle>
-            <AuroraOrb size={260} state={orbFor(voice.state)} />
+            <Suspense fallback={<OrbPlaceholder size={260} />}>
+              <AuroraOrb size={260} state={orbFor(voice.state)} />
+            </Suspense>
           </GlassCircle>
         </button>
       </div>

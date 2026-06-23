@@ -221,18 +221,67 @@ def load_manifest(path: Path) -> ToolManifest:
     return _map_manifest(raw, str(resolved))
 
 
+# Discovery cache.  ``discover_manifests`` runs a recursive walk + per-file YAML
+# parse + jsonschema validate, and the dashboard hits it on every ``/v1/tools``,
+# tool-detail, and launch request.  The parse+validate work dominates, so we
+# cache the loaded manifests keyed on the resolved roots, invalidated by a cheap
+# filesystem signature (the set of ``tool.yaml`` paths + their mtimes).  A single
+# walk to build the signature is far cheaper than re-parsing every file, and it
+# still picks up a NEW tool.yaml (e.g. the Tool Forge writing into the writable
+# root) without a restart.  Mirrors the ``_SCHEMA_CACHE`` singleton style.
+_DiscoverySignature = frozenset  # frozenset of (path_str, mtime_ns) tuples
+_DISCOVERY_CACHE: Dict[tuple, tuple] = {}  # roots_key -> (signature, manifests)
+
+
+def _resolve_roots(roots: Optional[List[Path]]) -> List[Path]:
+    """Resolve the search roots once so the cache key and the walk agree."""
+    raw = roots if roots is not None else _resolve_default_roots()
+    return [Path(r).resolve() for r in raw]
+
+
+def _discovery_signature(search_roots: List[Path]) -> frozenset:
+    """Cheap filesystem signature: every ``tool.yaml`` path + its mtime.
+
+    Walks the dir tree only (no YAML parse / schema validate).  An added,
+    removed, or modified ``tool.yaml`` changes the signature and invalidates
+    the cache.  Missing roots simply contribute nothing.
+    """
+    sig: set = set()
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for yaml_path in root.rglob("tool.yaml"):
+            try:
+                mtime_ns = yaml_path.stat().st_mtime_ns
+            except OSError:
+                # Disappeared between walk and stat — treat as a change.
+                mtime_ns = -1
+            sig.add((str(yaml_path), mtime_ns))
+    return frozenset(sig)
+
+
 def discover_manifests(roots: Optional[List[Path]] = None) -> List[ToolManifest]:
     """Find + validate every ``tool.yaml`` under the skill roots.
 
     Walks each root recursively.  Per-file errors are logged at WARNING level
     and skipped so one bad manifest never blocks the rest.  Returns a list of
     all successfully loaded ``ToolManifest`` objects.
-    """
-    search_roots = roots if roots is not None else _resolve_default_roots()
-    manifests: List[ToolManifest] = []
 
+    Results are cached per resolved-roots key and reused while the filesystem
+    signature (tool.yaml paths + mtimes) is unchanged, so the hot dashboard path
+    avoids repeated YAML parse + schema validation.  A new tool.yaml under a root
+    invalidates the cache automatically.
+    """
+    search_roots = _resolve_roots(roots)
+    roots_key = tuple(str(r) for r in search_roots)
+    signature = _discovery_signature(search_roots)
+
+    cached = _DISCOVERY_CACHE.get(roots_key)
+    if cached is not None and cached[0] == signature:
+        return cached[1]
+
+    manifests: List[ToolManifest] = []
     for root in search_roots:
-        root = Path(root)
         if not root.exists():
             log.debug("Skill root does not exist, skipping: %s", root)
             continue
@@ -243,4 +292,5 @@ def discover_manifests(roots: Optional[List[Path]] = None) -> List[ToolManifest]
             except (FileNotFoundError, ValueError, yaml.YAMLError) as exc:
                 log.warning("Skipping invalid manifest %s: %s", yaml_path, exc)
 
+    _DISCOVERY_CACHE[roots_key] = (signature, manifests)
     return manifests
