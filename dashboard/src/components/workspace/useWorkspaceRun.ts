@@ -1,13 +1,13 @@
-// useWorkspaceRun — drives one workspace orchestrator run. Mirrors useBrainstormRun
-// (same SSE/transcript lane mechanism, reusing the AgentLane type + ExecutionConsole)
-// but with the workspace team roster and workspace.json phase state.
+// useWorkspaceRun — drives one workspace orchestrator run. Reuses the shared
+// useRunLanes engine (same SSE/transcript lane mechanism + AgentLane type) with
+// the workspace team roster + architect main lane, and layers on the
+// workspace.json phase state and per-feature design→sprint cycle.
 
-import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import type { AgentLane } from "@/components/brainstorm/useBrainstormRun";
+import { useCallback, useRef, useState } from "react";
+import type { AgentLane, LaneRole } from "@/components/toolkit/agentRun";
+import { useRunLanes } from "@/components/toolkit/useRunLanes";
 import type { QnADoc } from "@/lib/brainstorm/brainstormClient";
 import {
-  streamRun,
-  fetchTranscript,
   fetchWorkspaceState,
   fetchWorkspaceQna,
   fetchDesign,
@@ -16,7 +16,7 @@ import {
   sendDirective,
   createFeature as createFeatureReq,
   switchFeature as switchFeatureReq,
-  isStreamNotLive,
+  WORKSPACE_TOOL_ID,
   type RunEvent,
   type WorkspaceState,
   type WorkspacePhase,
@@ -29,7 +29,7 @@ const MAIN_ROLE = "Architect · Orchestrator";
 
 // The workspace team. Order = sidebar order; `match` infers a lane's role from the
 // Task description / transcript brief so the spawn + transcript merge into one lane.
-export const WORKSPACE_ROLES: { key: string; label: string; match: RegExp }[] = [
+export const WORKSPACE_ROLES: LaneRole[] = [
   { key: "pm", label: "PM", match: /\bpm\b|product manager|\bproduct\b/i },
   { key: "ux", label: "UX Designer", match: /\bux\b|ux.?design|user experience/i },
   { key: "frontend", label: "Frontend Dev", match: /front.?end|\bui\b/i },
@@ -39,11 +39,6 @@ export const WORKSPACE_ROLES: { key: string; label: string; match: RegExp }[] = 
   { key: "test", label: "Test Architect", match: /test|\bqa\b/i },
   { key: "review", label: "Code Reviewer", match: /review/i },
 ];
-
-function inferRole(text: string): { key: string; label: string } | undefined {
-  for (const r of WORKSPACE_ROLES) if (r.match.test(text)) return { key: r.key, label: r.label };
-  return undefined;
-}
 
 interface Result {
   lanes: AgentLane[];
@@ -71,47 +66,15 @@ export function useWorkspaceRun(
   runId: string | null,
   { streamLive = true }: { streamLive?: boolean } = {},
 ): Result {
-  const lanesRef = useRef<Map<string, AgentLane>>(new Map());
-  const taskLabels = useRef<Map<string, string>>(new Map());
-  const tidToLane = useRef<Map<string, string>>(new Map());
-  const [, force] = useReducer((x: number) => x + 1, 0);
-
   const [state, setState] = useState<WorkspaceState | null>(null);
   const [qna, setQna] = useState<QnADoc | null>(null);
   const [design, setDesign] = useState<string | null>(null);
   const [epics, setEpics] = useState<string | null>(null);
-  const [streaming, setStreaming] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   // Feature being VIEWED (override). null → follow workspace.json.active_feature.
   const [featureOverride, setFeatureOverride] = useState<string | null>(null);
   const featureOverrideRef = useRef<string | null>(null);
-
-  const ensureLane = useCallback((id: string, label?: string): AgentLane => {
-    const map = lanesRef.current;
-    let lane = map.get(id);
-    if (!lane) {
-      const isMain = id === MAIN_LANE_ID;
-      const text = isMain ? MAIN_LABEL : label || "Specialist";
-      const role = isMain ? undefined : inferRole(text);
-      lane = {
-        id,
-        label: isMain ? MAIN_LABEL : role?.label ?? text,
-        role: isMain ? MAIN_ROLE : "Specialist",
-        metric: role?.key,
-        status: "thinking",
-        thinking: "",
-        response: "",
-        activity: [],
-        active: true,
-      };
-      map.set(id, lane);
-    }
-    return lane;
-  }, []);
-
-  const laneKeyFor = useCallback((label: string, fallback: string): string => {
-    return inferRole(label)?.key ?? fallback;
-  }, []);
+  // setError is wired up after useRunLanes; the ref lets refetch close over it.
+  const setErrorRef = useRef<(e: string | null) => void>(() => {});
 
   const refetch = useCallback(async () => {
     if (!runId) return;
@@ -131,140 +94,18 @@ export function useWorkspaceRun(
       setDesign(d);
       setEpics(e2);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "failed to load workspace state");
+      setErrorRef.current(e instanceof Error ? e.message : "failed to load workspace state");
     }
   }, [runId]);
 
-  const applyEvent = useCallback(
-    (ev: RunEvent) => {
-      const kind = ev.event || ev.type;
-
-      if (ev.subagent) {
-        const label = typeof ev.lane_label === "string" ? ev.lane_label : "";
-        const fallback = typeof ev.lane_id === "string" ? ev.lane_id : "specialist";
-        const lane = ensureLane(laneKeyFor(label, fallback), label || fallback);
-        lane.active = true;
-        if (kind === "reasoning.available" && typeof ev.text === "string") {
-          lane.thinking += ev.text;
-          lane.status = "thinking";
-        } else if (kind === "message.delta" && typeof ev.delta === "string") {
-          lane.response += ev.delta;
-          lane.status = "writing";
-        } else if (kind === "tool.started" && ev.tool && ev.tool !== "trace") {
-          lane.activity = [...lane.activity, ev.preview || ev.tool];
-          lane.status = "writing";
-        }
-        force();
-        return;
-      }
-
-      const laneId = ev.parent_tool_use_id || MAIN_LANE_ID;
-      const isSpawn = ev.tool === "Agent" || ev.tool === "Task";
-      if (kind === "tool.started" && isSpawn && typeof ev.tid === "string") {
-        const preview = ev.preview ?? "";
-        if (preview) taskLabels.current.set(ev.tid, preview);
-        const key = laneKeyFor(preview, ev.tid);
-        tidToLane.current.set(ev.tid, key);
-        const main = ensureLane(MAIN_LANE_ID);
-        main.activity = [...main.activity, `▶ spawn ${preview || "specialist"}`];
-        const lane = ensureLane(key, preview);
-        lane.active = true;
-        lane.status = "thinking";
-        force();
-        return;
-      }
-      if (kind === "tool.completed" && isSpawn && typeof ev.tid === "string") {
-        const key = tidToLane.current.get(ev.tid) ?? ev.tid;
-        const lane = ensureLane(key, taskLabels.current.get(ev.tid) || "");
-        if (typeof ev.result === "string" && ev.result.trim() && !lane.response) {
-          lane.response = ev.result;
-        }
-        lane.status = "done";
-        lane.active = false;
-        force();
-        return;
-      }
-      if (kind === "reasoning.available" && typeof ev.text === "string") {
-        const lane = ensureLane(laneId);
-        lane.thinking += ev.text;
-        lane.status = "thinking";
-        force();
-        return;
-      }
-      if (kind === "message.delta" && typeof ev.delta === "string") {
-        const lane = ensureLane(laneId);
-        lane.response += ev.delta;
-        lane.status = "writing";
-        force();
-        return;
-      }
-      if (kind === "tool.started" && ev.tool && ev.tool !== "trace") {
-        const lane = ensureLane(laneId);
-        lane.activity = [...lane.activity, ev.preview || ev.tool];
-        lane.status = "writing";
-        force();
-        return;
-      }
-      if (kind === "run.completed" || kind === "run.failed" || kind === "run.cancelled") {
-        if (kind === "run.failed" && typeof ev.error === "string") setError(ev.error);
-        for (const lane of lanesRef.current.values()) {
-          lane.active = false;
-          if (lane.status !== "done") lane.status = "idle";
-        }
-        setStreaming(false);
-        force();
-        void refetch();
-        return;
-      }
-    },
-    [ensureLane, laneKeyFor, refetch],
-  );
-
-  useEffect(() => {
-    if (!runId) return;
-    let cancelled = false;
-    const controller = new AbortController();
-    // Reset lane state when the run changes so a relaunch doesn't show ghost
-    // lanes/events from the previous run.
-    lanesRef.current = new Map();
-    taskLabels.current = new Map();
-    tidToLane.current = new Map();
-    ensureLane(MAIN_LANE_ID);
-    force();
-    void refetch();
-
-    if (streamLive) {
-      setStreaming(true);
-      streamRun(runId, { onEvent: applyEvent, signal: controller.signal })
-        .catch((e) => {
-          if (cancelled) return;
-          if (!isStreamNotLive(e)) setError(e instanceof Error ? e.message : "stream failed");
-        })
-        .finally(() => {
-          if (!cancelled) setStreaming(false);
-        });
-    } else {
-      fetchTranscript(runId, controller.signal)
-        .then((events) => {
-          if (cancelled) return;
-          for (const ev of events) applyEvent(ev);
-        })
-        .catch(() => {});
-    }
-    return () => {
-      cancelled = true;
-      controller.abort();
-    };
-  }, [runId, streamLive, applyEvent, ensureLane, refetch]);
-
-  useEffect(() => {
-    if (!runId || !streaming) return;
-    const id = setInterval(() => {
-      if (typeof document !== "undefined" && document.hidden) return;
-      void refetch();
-    }, 2500);
-    return () => clearInterval(id);
-  }, [runId, streaming, refetch]);
+  const { lanes, streaming, setStreaming, error, setError, applyEvent } = useRunLanes(runId, {
+    roles: WORKSPACE_ROLES,
+    mainLane: { id: MAIN_LANE_ID, label: MAIN_LABEL, role: MAIN_ROLE },
+    streamLive,
+    toolId: WORKSPACE_TOOL_ID,
+    refetch,
+  });
+  setErrorRef.current = setError;
 
   const submitAnswers = useCallback(
     async (answers: Record<string, string>) => {
@@ -280,7 +121,7 @@ export function useWorkspaceRun(
         await refetch();
       }
     },
-    [runId, applyEvent, refetch],
+    [runId, applyEvent, refetch, setError, setStreaming],
   );
 
   const directive = useCallback(
@@ -297,7 +138,7 @@ export function useWorkspaceRun(
         await refetch();
       }
     },
-    [runId, applyEvent, refetch],
+    [runId, applyEvent, refetch, setError, setStreaming],
   );
 
   // View the docs of a specific feature without resuming it (local-only).
@@ -321,7 +162,7 @@ export function useWorkspaceRun(
         await refetch();
       }
     },
-    [runId, applyEvent, refetch],
+    [runId, applyEvent, refetch, setError, setStreaming],
   );
 
   const createFeature = useCallback(
@@ -343,7 +184,6 @@ export function useWorkspaceRun(
 
   const liveFeature = state?.active_feature ?? null;
   const activeFeature = featureOverride ?? liveFeature;
-  const lanes = Array.from(lanesRef.current.values());
   return {
     lanes, state, qna, design, epics,
     phase: state?.phase ?? null,
