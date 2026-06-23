@@ -179,11 +179,14 @@ export function WorkspaceDetail() {
           >
             <ArrowLeft className="h-4 w-4" />
           </button>
-          <FolderGit2 className="h-4 w-4 text-[#a78bfa]" />
-          <h1 className="text-sm font-semibold tracking-tight text-white">{name}</h1>
-          <span className="text-[11px] text-white/35">10_Projects/{slug}</span>
-          <div className="ml-auto flex items-center gap-2">
-            <PhaseStepper phase={cyclePhase ?? phase} />
+          <FolderGit2 className="h-4 w-4 shrink-0 text-[#a78bfa]" />
+          <h1 className="truncate text-sm font-semibold tracking-tight text-white">{name}</h1>
+          <span className="hidden truncate text-[11px] text-white/35 sm:inline">10_Projects/{slug}</span>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {/* stepper hidden on narrow (it's the widest element); Terminal stays */}
+            <div className="hidden md:block">
+              <PhaseStepper phase={cyclePhase ?? phase} />
+            </div>
             <button
               type="button"
               onClick={() => setShowLogs((v) => !v)}
@@ -210,9 +213,10 @@ export function WorkspaceDetail() {
           />
         )}
 
-        <div className="flex min-h-0 flex-1 gap-4">
-          {/* left: team */}
-          <GlassPanel className="w-[280px] shrink-0">
+        <div className="flex min-h-0 flex-1 gap-3 xl:gap-4">
+          {/* left: team — hidden on narrow screens (the execution console shows
+              all agents anyway) so the center + right panels get the room. */}
+          <GlassPanel className="hidden w-[240px] shrink-0 lg:block 2xl:w-[280px]">
             <div className="flex h-full flex-col gap-3 p-4">
               {state?.summary && (
                 <div className="group relative shrink-0">
@@ -272,8 +276,8 @@ export function WorkspaceDetail() {
           </GlassPanel>
 
           {/* right: phase-aware panel (Design / Q&A) + actions + composer */}
-          <GlassPanel className="w-[440px] shrink-0">
-            <header className="flex items-center gap-2 px-4 py-3">
+          <GlassPanel className="w-[380px] shrink-0 2xl:w-[440px]">
+            <header className="flex flex-wrap items-center gap-2 px-4 py-3">
               <div className="flex gap-1 rounded-xl border border-white/10 bg-white/[0.03] p-1">
                 <Tab active={view === "design"} onClick={() => setView("design")}
                   icon={<FileText className="h-4 w-4" />} label="Design" />
@@ -283,7 +287,7 @@ export function WorkspaceDetail() {
                   icon={<MessageCircleQuestion className="h-4 w-4" />}
                   label={`Q&A${hasQna ? ` · ${openQuestions.length}` : ""}`} />
               </div>
-              <div className="ml-auto">
+              <div className="ml-auto flex flex-wrap items-center justify-end gap-2 [&>button]:whitespace-nowrap">
                 {!canAct && viewedFeature && (
                   <button type="button" onClick={() => switchFeature(viewedFeature.slug)} disabled={streaming}
                     title="Make this the active feature and resume it"
