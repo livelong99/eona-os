@@ -26,6 +26,7 @@ import os
 import re
 import time
 import uuid
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -277,7 +278,60 @@ def _manifest_to_dict(m: Any) -> dict:
 # --resume that exact Claude Code conversation.
 # ---------------------------------------------------------------------------
 
-_RUN_REGISTRY: Dict[str, Dict[str, Any]] = {}
+# Cap on the live registry: the durable ``labs_store`` remains the long-term
+# record, so the in-memory dict only needs to hold the recent/active working set.
+_RUN_REGISTRY_MAX = 200
+
+
+class _BoundedRunRegistry(OrderedDict):
+    """Insertion-ordered run registry that self-evicts to stay under a max size.
+
+    Eviction policy (runs on every insert of a NEW key):
+
+    - Never evict a *busy* (in-flight) run — its turn is still streaming and the
+      ``/message`` concurrency guard + SSE stream depend on the live record.
+    - Evict the OLDEST completed run first (the front of the insertion order is
+      the least-recently-inserted; completed runs there are the safest to drop).
+    - Only if no completed run can be freed do we fall back to evicting the oldest
+      non-busy run, so an unbounded backlog of still-open-but-idle runs can't pin
+      the registry above its cap forever.
+
+    The durable store keeps every run, so an evicted record is re-hydratable on
+    demand via ``labs_store.get_run`` (the resume/artifacts endpoints already do
+    a read-through on a registry miss).
+    """
+
+    def __setitem__(self, key: str, value: Dict[str, Any]) -> None:
+        is_new = key not in self
+        super().__setitem__(key, value)
+        if is_new:
+            self.move_to_end(key)  # newest inserts sit at the back
+            self._evict_if_needed()
+
+    def _evict_if_needed(self) -> None:
+        while len(self) > _RUN_REGISTRY_MAX:
+            victim = self._pick_victim()
+            if victim is None:
+                # Everything over the cap is busy/in-flight — never evict those.
+                # The cap is a soft bound; let it ride until a turn settles.
+                return
+            del self[victim]
+
+    def _pick_victim(self) -> Optional[str]:
+        # Prefer the oldest COMPLETED run; insertion order makes the first match
+        # the least-recently-added completed run.
+        oldest_idle: Optional[str] = None
+        for rid, rec in self.items():
+            if rec.get("busy"):
+                continue
+            if rec.get("completed"):
+                return rid
+            if oldest_idle is None:
+                oldest_idle = rid
+        return oldest_idle
+
+
+_RUN_REGISTRY: "OrderedDict[str, Dict[str, Any]]" = _BoundedRunRegistry()
 
 # The in-memory dict above is the hot-path source of truth, but it is wiped on
 # every engine restart/rebuild.  ``labs_store`` mirrors the durable subset of

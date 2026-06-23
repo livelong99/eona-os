@@ -20,15 +20,19 @@ rebuilds) so those lookups keep working across restarts.  Design notes:
 - **Parameterized SQL only.** No string interpolation into queries.
 - **Persisted columns** are the fields the resume/artifacts endpoints need after
   a restart: ``run_id, tool_id, brand, brand_id, session_id, claude_session_id,
-  status, created, updated, completed``.  ``busy`` (liveness) and ``inputs`` are
-  intentionally NOT persisted — ``busy`` is a per-process concurrency guard that
-  a restart resets, and the artifacts path only needs ``brand``.
+  status, created, updated, completed``, plus the resume-turn payload
+  ``inputs`` (JSON), ``run_cwd`` and ``swarm``.  Without ``inputs`` and
+  ``run_cwd`` a ``/message`` resume after a restart silently loses capability:
+  ``run_cwd`` falls back to re-deriving from the artifacts dir and ``inputs``
+  comes back empty.  ``busy`` (liveness) is intentionally NOT persisted — it is a
+  per-process concurrency guard that a restart resets.
 
 On load, ``busy`` is forced ``False`` for every record: a restart kills any live
 turn, so no run can still be mid-generation.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
@@ -45,7 +49,9 @@ _LOCK = threading.Lock()
 
 _DB_PATH: Optional[Path] = None
 
-# Columns persisted to the `runs` table, in declaration order.
+# Columns persisted to the `runs` table, in declaration order.  ``inputs`` holds
+# the launch inputs as a JSON string; ``run_cwd`` and ``swarm`` carry the rest of
+# the resume-turn payload so a ``/message`` after a restart keeps full capability.
 _COLUMNS = (
     "run_id",
     "tool_id",
@@ -57,6 +63,25 @@ _COLUMNS = (
     "created",
     "updated",
     "completed",
+    "inputs",
+    "run_cwd",
+    "swarm",
+)
+
+# Columns selected when hydrating a record (everything except the bookkeeping
+# ``brand_id``/``updated`` mirror columns the in-memory record never reads).
+_LOAD_COLUMNS = (
+    "run_id",
+    "tool_id",
+    "brand",
+    "session_id",
+    "claude_session_id",
+    "status",
+    "created",
+    "completed",
+    "inputs",
+    "run_cwd",
+    "swarm",
 )
 
 
@@ -123,10 +148,19 @@ def init_db() -> None:
                     status            TEXT,
                     created           REAL,
                     updated           REAL,
-                    completed         INTEGER
+                    completed         INTEGER,
+                    inputs            TEXT,
+                    run_cwd           TEXT,
+                    swarm             INTEGER
                 )
                 """
             )
+            # Migrate pre-existing DBs that were created before the resume-payload
+            # columns existed: add any missing column (idempotent, best-effort).
+            existing = {row["name"] for row in conn.execute("PRAGMA table_info(runs)")}
+            for col, decl in (("inputs", "TEXT"), ("run_cwd", "TEXT"), ("swarm", "INTEGER")):
+                if col not in existing:
+                    conn.execute(f"ALTER TABLE runs ADD COLUMN {col} {decl}")
     except Exception as exc:
         logger.warning("labs_store: init_db failed: %s", exc)
 
@@ -151,6 +185,14 @@ def persist_run(run_id: str, record: Dict[str, Any]) -> None:
     Never raises: a failed write logs and returns so the live path is unaffected.
     """
     brand = record.get("brand") or ""
+    inputs = record.get("inputs")
+    try:
+        inputs_text = json.dumps(inputs, ensure_ascii=False) if inputs is not None else None
+    except (TypeError, ValueError):
+        # A non-serializable input must not break the durable write; drop it so the
+        # rest of the resume payload (run_cwd, swarm) still persists.
+        logger.warning("labs_store: inputs for %s not JSON-serializable; persisting null", run_id)
+        inputs_text = None
     row = {
         "run_id": run_id,
         "tool_id": record.get("tool_id"),
@@ -162,6 +204,9 @@ def persist_run(run_id: str, record: Dict[str, Any]) -> None:
         "created": record.get("created"),
         "updated": time.time(),
         "completed": 1 if record.get("completed") else 0,
+        "inputs": inputs_text,
+        "run_cwd": record.get("run_cwd"),
+        "swarm": 1 if record.get("swarm") else 0,
     }
     placeholders = ", ".join("?" for _ in _COLUMNS)
     columns = ", ".join(_COLUMNS)
@@ -178,61 +223,28 @@ def persist_run(run_id: str, record: Dict[str, Any]) -> None:
         logger.warning("labs_store: persist_run(%s) failed: %s", run_id, exc)
 
 
-def load_all() -> List[Dict[str, Any]]:
-    """Return all persisted runs as record dicts for hydrating the in-memory cache.
+def _decode_inputs(raw: Any) -> Dict[str, Any]:
+    """Parse the persisted ``inputs`` JSON back to a dict.
 
-    Each dict carries the same keys other callers read: ``session_id``,
-    ``tool_id``, ``brand``, ``claude_session_id``, ``created``, ``completed``,
-    ``status``, plus ``run_id``.  ``busy`` is set ``False`` (a restart kills any
-    live turn) and ``inputs`` defaults to an empty dict (not persisted).
-    Never raises — returns ``[]`` on any error so module init can't crash.
+    Returns ``{}`` when the column is NULL (older record) or the JSON is corrupt
+    or not an object — the in-memory record always treats ``inputs`` as a dict.
     """
-    out: List[Dict[str, Any]] = []
+    if not raw:
+        return {}
     try:
-        with _LOCK, _connect() as conn:
-            cur = conn.execute(
-                "SELECT run_id, tool_id, brand, session_id, claude_session_id, "
-                "status, created, completed FROM runs"
-            )
-            rows = cur.fetchall()
-    except Exception as exc:
-        logger.warning("labs_store: load_all failed: %s", exc)
-        return out
-
-    for r in rows:
-        out.append(
-            {
-                "run_id": r["run_id"],
-                "tool_id": r["tool_id"],
-                "brand": r["brand"] or "",
-                "session_id": r["session_id"],
-                "claude_session_id": r["claude_session_id"],
-                "status": r["status"],
-                "created": r["created"],
-                "completed": bool(r["completed"]),
-                # Restart-derived defaults (not persisted):
-                "busy": False,
-                "inputs": {},
-            }
-        )
-    return out
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
 
 
-def get_run(run_id: str) -> Optional[Dict[str, Any]]:
-    """Fetch a single persisted run by id, or ``None``.  Never raises."""
-    try:
-        with _LOCK, _connect() as conn:
-            cur = conn.execute(
-                "SELECT run_id, tool_id, brand, session_id, claude_session_id, "
-                "status, created, completed FROM runs WHERE run_id = ?",
-                (run_id,),
-            )
-            r = cur.fetchone()
-    except Exception as exc:
-        logger.warning("labs_store: get_run(%s) failed: %s", run_id, exc)
-        return None
-    if r is None:
-        return None
+def _row_to_record(r: sqlite3.Row) -> Dict[str, Any]:
+    """Shape a ``runs`` row into the in-memory record dict callers read.
+
+    ``busy`` is forced ``False`` (a restart kills any live turn); ``inputs``,
+    ``run_cwd`` and ``swarm`` are rehydrated so a ``/message`` resume after a
+    restart carries the full launch payload.
+    """
     return {
         "run_id": r["run_id"],
         "tool_id": r["tool_id"],
@@ -242,6 +254,42 @@ def get_run(run_id: str) -> Optional[Dict[str, Any]]:
         "status": r["status"],
         "created": r["created"],
         "completed": bool(r["completed"]),
+        "inputs": _decode_inputs(r["inputs"]),
+        "run_cwd": r["run_cwd"],
+        "swarm": bool(r["swarm"]),
+        # Restart-derived default (not persisted): no run can be mid-turn.
         "busy": False,
-        "inputs": {},
     }
+
+
+def load_all() -> List[Dict[str, Any]]:
+    """Return all persisted runs as record dicts for hydrating the in-memory cache.
+
+    Each dict carries the keys other callers read: ``session_id``, ``tool_id``,
+    ``brand``, ``claude_session_id``, ``created``, ``completed``, ``status``,
+    ``inputs``, ``run_cwd``, ``swarm``, plus ``run_id``.  ``busy`` is set
+    ``False`` (a restart kills any live turn).  Never raises — returns ``[]`` on
+    any error so module init can't crash.
+    """
+    columns = ", ".join(_LOAD_COLUMNS)
+    try:
+        with _LOCK, _connect() as conn:
+            rows = conn.execute(f"SELECT {columns} FROM runs").fetchall()
+    except Exception as exc:
+        logger.warning("labs_store: load_all failed: %s", exc)
+        return []
+    return [_row_to_record(r) for r in rows]
+
+
+def get_run(run_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch a single persisted run by id, or ``None``.  Never raises."""
+    columns = ", ".join(_LOAD_COLUMNS)
+    try:
+        with _LOCK, _connect() as conn:
+            r = conn.execute(
+                f"SELECT {columns} FROM runs WHERE run_id = ?", (run_id,)
+            ).fetchone()
+    except Exception as exc:
+        logger.warning("labs_store: get_run(%s) failed: %s", run_id, exc)
+        return None
+    return _row_to_record(r) if r is not None else None
