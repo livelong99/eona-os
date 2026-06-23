@@ -55,7 +55,7 @@
     "artifacts_root": { "type": "string", "description": "Template path for outputs, e.g. {project}/resources/branding/Brands/{brand}/" },
     "swarm": { "type": "boolean", "default": false, "description": "When true, the run is widened to allow the native Task tool + the claude-flow (Ruflo) MCP server, and the session folder is provisioned with `ruflo init` + a steering CLAUDE.md before the agent's first turn." },
     "steering": { "type": "string", "description": "Filename of a steering doc (relative to the skill's assets/, written as CLAUDE.md into the provisioned session folder) that instructs the orchestrating agent." },
-    "permission_mode": { "type": "string", "enum": ["default", "acceptEdits", "auto", "bypassPermissions"], "description": "Claude Code permission mode for the run. Autonomous tools that must write into .claude/ and implement code unattended use 'bypassPermissions' (the container is the sandbox). Omit for the curated default (acceptEdits)." },
+    "permission_mode": { "type": "string", "enum": ["default", "acceptEdits", "auto"], "description": "Claude Code permission mode for the run. Omit for the curated default (acceptEdits). NOTE: a self-elevating 'bypassPermissions' is intentionally NOT accepted from manifests — privilege bypass must be an operator decision, not a tool-authored one." },
     "brain": {
       "type": "object",
       "additionalProperties": false,

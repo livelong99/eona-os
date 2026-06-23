@@ -658,13 +658,16 @@ class _SubagentTailer:
         self._thread.start()
 
     def stop(self) -> None:
+        # Join the poll loop BEFORE the final drain so the two threads never run
+        # `_poll()` (which mutates self._offsets) concurrently — concurrent reads
+        # would re-emit the same JSONL lines as duplicate events.
         self._stop.set()
-        try:
-            self._poll()  # final drain so the last lines aren't lost
-        except Exception:
-            logger.debug("transcript tailer final drain failed", exc_info=True)
         if self._thread is not None:
             self._thread.join(timeout=2.0)
+        try:
+            self._poll()  # final drain so the last lines aren't lost (now single-threaded)
+        except Exception:
+            logger.debug("transcript tailer final drain failed", exc_info=True)
 
     # -- internals ------------------------------------------------------------
 

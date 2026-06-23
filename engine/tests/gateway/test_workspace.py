@@ -84,8 +84,11 @@ def test_ingest_brainstorm_seeds_prd_only(env):
 
 def test_ingest_github_url_validation(env):
     dest = env / "10_Projects" / "bad"
-    with pytest.raises(ValueError, match="git@ URL"):
-        d._ingest_workspace("github", "not-a-url", dest)
+    # https on an allowed host only — bare strings, git@ SSH (SSRF), and
+    # disallowed hosts are all rejected before any clone runs.
+    for bad in ("not-a-url", "git@github.com:o/r.git", "https://evil.example.com/o/r.git"):
+        with pytest.raises(ValueError, match="allowed host"):
+            d._ingest_workspace("github", bad, dest)
 
 
 def test_ingest_unknown_source(env):

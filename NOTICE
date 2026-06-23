@@ -1,0 +1,29 @@
+agent-home
+Copyright (c) 2026 Vaibhav Chaudhary
+
+This product includes third-party software under permissive licenses. The
+following attributions are provided per those licenses:
+
+- Hermes-Agent (engine/ runtime) — Copyright (c) 2025 Nous Research — MIT License.
+  See engine/LICENSE.
+
+- Anthropic security-guidance hook patterns
+  (engine/plugins/security-guidance/) — Apache License 2.0.
+  See engine/plugins/security-guidance/LICENSE and NOTICE (retained per Apache-2.0 §4).
+
+- hermes-ink (engine/ui-tui/packages/hermes-ink/) — a fork of `ink`
+  (React for CLIs), Copyright (c) Vadim Demedes — MIT License.
+
+- openWakeWord models (dashboard/public/models/oww/) — MIT License.
+  See dashboard/public/models/oww/README.md.
+
+- ONNX Runtime Web (dashboard/public/ort/) — Copyright (c) Microsoft — MIT License.
+
+- JetBrains Mono font (where bundled as .woff2) — SIL Open Font License 1.1.
+
+JavaScript and Python dependencies are distributed under their own licenses
+(MIT / BSD / ISC / Apache-2.0 / PSF) as declared in dashboard/package.json and
+engine/pyproject.toml; none impose copyleft obligations on this project.
+
+External tools invoked at runtime (the `claude` CLI, `ruflo`/`@claude-flow/cli`,
+`@21st-dev/magic`, BMAD skills) are not bundled or redistributed by this project.

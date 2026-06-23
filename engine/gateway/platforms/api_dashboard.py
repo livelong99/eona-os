@@ -567,11 +567,24 @@ def _ingest_workspace(source_type: str, source_ref: str, dest: Path) -> None:
 
     if source_type == "github":
         url = (source_ref or "").strip()
-        if not (url.startswith("https://") or url.startswith("http://") or url.startswith("git@")):
-            raise ValueError("github source must be an http(s):// or git@ URL")
+        # Only https:// clones from an allow-list of public hosts. SSH (`git@`) is
+        # rejected — it would let the engine open TCP to arbitrary internal hosts
+        # (SSRF). Override the host allow-list via HERMES_GIT_ALLOWED_HOSTS (csv).
+        from urllib.parse import urlparse
+        allowed = {h.strip().lower() for h in os.environ.get(
+            "HERMES_GIT_ALLOWED_HOSTS", "github.com,gitlab.com,bitbucket.org",
+        ).split(",") if h.strip()}
+        parsed = urlparse(url)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme != "https" or host not in allowed:
+            raise ValueError(
+                "github source must be an https:// URL on an allowed host "
+                f"({', '.join(sorted(allowed))})"
+            )
         git = os.environ.get("GIT_BIN", "git")
         proc = subprocess.run(
-            [git, "clone", "--depth", "1", url, str(dest)],
+            # `--` so a crafted URL can't be parsed as a flag.
+            [git, "clone", "--depth", "1", "--", url, str(dest)],
             capture_output=True, text=True, timeout=600,
         )
         if proc.returncode != 0:
@@ -982,18 +995,15 @@ def _start_run(
                     result = await loop.run_in_executor(None, _cont_turn)
 
             else:
-                # Plain tool-launch run — single conversation turn.
-                result, usage = await loop.run_in_executor(None, lambda: (
-                    _run_sync(),
-                    {
-                        "input_tokens": 0,
-                        "output_tokens": 0,
-                        "total_tokens": 0,
-                    },
-                ))
-                # _run_sync returns (result, usage) shape from agent; flatten.
-                if isinstance(result, tuple) and len(result) == 2:
-                    result, usage = result
+                # Plain tool-launch run — single conversation turn. Read real token
+                # usage off the agent after the turn (run_conversation returns a
+                # dict; the counters live on the agent), not a zeroed placeholder.
+                result = await loop.run_in_executor(None, _run_sync)
+                usage = {
+                    "input_tokens": getattr(agent, "session_prompt_tokens", 0) or 0,
+                    "output_tokens": getattr(agent, "session_completion_tokens", 0) or 0,
+                    "total_tokens": getattr(agent, "session_total_tokens", 0) or 0,
+                }
 
                 # Persist the Claude Code session id so a /message follow-up can
                 # --resume this exact conversation (live Workbench).
@@ -1816,6 +1826,14 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
             await asyncio.sleep(0.05)
         q = adapter._run_streams.get(run_id)
         if q is None:
+            # The run task is in flight but never registered a stream — clear any
+            # stale created-marker so /status doesn't report this run "live"
+            # forever (the dashboard would subscribe to a queue that never fills).
+            try:
+                adapter._run_streams.pop(run_id, None)
+                getattr(adapter, "_run_streams_created", {}).pop(run_id, None)
+            except Exception:
+                pass
             return web.json_response(
                 {"error": "stream_unavailable", "detail": "run stream not ready"},
                 status=500,
@@ -1844,8 +1862,12 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
         except (ConnectionResetError, asyncio.CancelledError):
             pass
         finally:
-            adapter._run_streams.pop(run_id, None)
-            adapter._run_streams_created.pop(run_id, None)
+            # Identity-checked pop: only remove the queue WE drained. A client
+            # disconnect mid-turn must not delete a queue a subsequent /message
+            # turn has since registered under the same run_id.
+            if adapter._run_streams.get(run_id) is q:
+                adapter._run_streams.pop(run_id, None)
+                adapter._run_streams_created.pop(run_id, None)
         return response
 
     # ------------------------------------------------------------------
@@ -3201,6 +3223,9 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
         body = body if isinstance(body, dict) else {}
         slug = _kebab(body.get("slug") if isinstance(body.get("slug"), str) else "")
         name = (body.get("name") if isinstance(body.get("name"), str) else "").strip()
+        # Strip control chars and cap length so a huge/garbage name can't bloat
+        # workspace.json / the marker (re-read on every projects listing).
+        name = "".join(ch for ch in name if ch >= " " or ch == "\t")[:200].strip()
         if not slug or not name:
             return web.json_response(
                 {"error": "invalid_request", "detail": "require slug + name"}, status=400)

@@ -933,6 +933,15 @@ class APIServerAdapter(BasePlatformAdapter):
         the no-key branch only exists for tests or unsupported manual wiring.
         """
         if not self._api_key:
+            # No key configured → auth is OFF. connect() normally refuses to start
+            # without API_SERVER_KEY; if this branch is ever reached in a real
+            # deployment every endpoint is open, so make it loud (once).
+            if not getattr(self, "_warned_no_api_key", False):
+                self._warned_no_api_key = True
+                logger.warning(
+                    "API_SERVER_KEY is not set — dashboard endpoints are UNAUTHENTICATED. "
+                    "Set API_SERVER_KEY to require a Bearer token."
+                )
             return None
 
         auth_header = request.headers.get("Authorization", "")
