@@ -1956,6 +1956,7 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
             },
         )
         await response.prepare(request)
+        terminal = False  # True only when the turn's end-of-stream sentinel is read
         try:
             while True:
                 try:
@@ -1964,16 +1965,18 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
                     await response.write(b": keepalive\n\n")
                     continue
                 if event is None:
+                    terminal = True
                     await response.write(b": stream closed\n\n")
                     break
                 await response.write(f"data: {json.dumps(event)}\n\n".encode())
         except (ConnectionResetError, asyncio.CancelledError):
             pass
         finally:
-            # Identity-checked pop: only remove the queue WE drained. A client
-            # disconnect mid-turn must not delete a queue a subsequent /message
-            # turn has since registered under the same run_id.
-            if adapter._run_streams.get(run_id) is q:
+            # Only retire the queue when the TURN ended (terminal sentinel), and
+            # only if it's still the one WE drained. A client disconnect mid-turn
+            # leaves it registered so the client can reconnect to /message-stream
+            # via GET /events; a later turn's queue is never clobbered here.
+            if terminal and adapter._run_streams.get(run_id) is q:
                 adapter._run_streams.pop(run_id, None)
                 adapter._run_streams_created.pop(run_id, None)
         return response

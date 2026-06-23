@@ -57,6 +57,8 @@ export function useRunLanes(
   const lanesRef = useRef<Map<string, AgentLane>>(new Map());
   const taskLabels = useRef<Map<string, string>>(new Map()); // tid → Agent description
   const tidToLane = useRef<Map<string, string>>(new Map()); // Agent tid → lane key
+  // True once the run reached a terminal event — stops the reconnect loop.
+  const terminalRef = useRef(false);
   const [, forceTick] = useReducer((x: number) => x + 1, 0);
   const force = useCallback(() => forceTick(), []);
 
@@ -195,6 +197,7 @@ export function useRunLanes(
         return;
       }
       if (kind === "run.completed" || kind === "run.failed" || kind === "run.cancelled") {
+        terminalRef.current = true; // run is done — don't reconnect
         if (kind === "run.failed" && typeof ev.error === "string") setError(ev.error);
         // Mark all lanes settled.
         for (const lane of lanesRef.current.values()) {
@@ -221,6 +224,7 @@ export function useRunLanes(
     lanesRef.current = new Map();
     taskLabels.current = new Map();
     tidToLane.current = new Map();
+    terminalRef.current = false;
     // Seed the main lane so the orchestrator always shows, even before its first token.
     ensureLane(mainLane.id);
     force();
@@ -230,17 +234,32 @@ export function useRunLanes(
 
     if (streamLive) {
       setStreaming(true);
-      streamRun(runId, { onEvent: applyEvent, signal: controller.signal })
-        .catch((e) => {
-          if (cancelled) return;
-          // 404 = not live; not an error (resumed/finished run).
-          if (!isStreamNotLive(e)) {
-            setError(e instanceof Error ? e.message : "stream failed");
+      // Reconnect loop: the engine keeps the run's event queue alive across a
+      // client disconnect, so a dropped connection (wifi blip, tab sleep, proxy
+      // idle-timeout) can re-subscribe to GET /events and resume the live run
+      // instead of dropping to read-only. A clean close = the run reached
+      // terminal; a 404 = the run isn't live; any other error = retry w/ backoff.
+      void (async () => {
+        let attempts = 0;
+        while (!cancelled && !terminalRef.current) {
+          try {
+            await streamRun(runId, { onEvent: applyEvent, signal: controller.signal });
+            break; // server closed the stream cleanly → run is done
+          } catch (e) {
+            if (cancelled) return;
+            if (isStreamNotLive(e)) break; // not live (resumed/finished run)
+            if (terminalRef.current) break;
+            attempts += 1;
+            if (attempts > 5) {
+              setError("Live stream lost — reconnect failed. Reload to resume.");
+              break;
+            }
+            await new Promise((r) => setTimeout(r, Math.min(1000 * attempts, 5000)));
+            // loop → reconnect to /events (the engine still holds the queue)
           }
-        })
-        .finally(() => {
-          if (!cancelled) setStreaming(false);
-        });
+        }
+        if (!cancelled) setStreaming(false);
+      })();
     } else {
       // Not live (refresh / reopened completed run): the event stream has no
       // replay, so rebuild the agent lanes from the persisted transcripts.

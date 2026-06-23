@@ -4507,6 +4507,7 @@ class APIServerAdapter(BasePlatformAdapter):
         )
         await response.prepare(request)
 
+        terminal = False  # True only when we read the run's end-of-stream sentinel
         try:
             while True:
                 try:
@@ -4516,6 +4517,7 @@ class APIServerAdapter(BasePlatformAdapter):
                     continue
                 if event is None:
                     # Run finished — send final SSE comment and close
+                    terminal = True
                     await response.write(b": stream closed\n\n")
                     break
                 payload = f"data: {json.dumps(event)}\n\n"
@@ -4523,8 +4525,14 @@ class APIServerAdapter(BasePlatformAdapter):
         except Exception as exc:
             logger.debug("[api_server] SSE stream error for run %s: %s", run_id, exc)
         finally:
-            self._run_streams.pop(run_id, None)
-            self._run_streams_created.pop(run_id, None)
+            # Only retire the queue when the RUN ended (terminal sentinel). On a
+            # client disconnect mid-run, leave it registered so the client can
+            # reconnect to GET /events and resume; the TTL sweep reclaims any
+            # truly-abandoned queue. (Identity-checked so a new turn's queue is
+            # never clobbered by a stale connection's teardown.)
+            if terminal and self._run_streams.get(run_id) is q:
+                self._run_streams.pop(run_id, None)
+                self._run_streams_created.pop(run_id, None)
 
         return response
 
