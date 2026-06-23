@@ -1,0 +1,71 @@
+name: 🐛 Bug report
+description: Report something that isn't working as expected
+title: "[Bug]: "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug! Please fill out the sections below so we can reproduce it quickly.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, and what you expected instead.
+      placeholder: When I…, I expected…, but instead…
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Minimal, ordered steps. Include exact commands where possible.
+      placeholder: |
+        1. Run `scripts/install.sh`
+        2. Open http://127.0.0.1:3737
+        3. Click …
+        4. See error
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Dashboard (UI)
+        - Engine / API (:8642)
+        - Claude bridge (:8765)
+        - Docker / install scripts
+        - Memory (Obsidian / Qdrant)
+        - Tools (SearXNG / Crawl4AI)
+        - Other / not sure
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Run `scripts/doctor.sh` and paste relevant output.
+      value: |
+        - OS: (e.g. macOS 15.5 Apple Silicon / Ubuntu 24.04 / Windows 11 WSL2)
+        - Docker: (`docker --version`)
+        - claude CLI: (`claude --version`)
+        - Commit / version:
+      render: markdown
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant logs from `docker compose logs` or the bridge. Redact any tokens.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-flight
+      options:
+        - label: I searched existing issues and this isn't a duplicate
+          required: true
+        - label: I removed any secrets/tokens from the details above
+          required: true

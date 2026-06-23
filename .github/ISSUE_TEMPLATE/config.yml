@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Questions & Discussions
+    url: https://github.com/livelong99/agent-home/discussions
+    about: Ask questions, share setups, and discuss ideas with the community.
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/livelong99/agent-home/security/advisories/new
+    about: Please disclose security issues privately — see SECURITY.md.
