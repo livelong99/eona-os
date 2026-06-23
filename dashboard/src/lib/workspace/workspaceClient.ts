@@ -5,10 +5,14 @@
 
 import {
   sendRunMessage,
-  artifactRawUrl,
   type RunEvent,
 } from "@/lib/labs/toolsClient";
-import type { QnADoc } from "@/lib/brainstorm/brainstormClient";
+import {
+  fetchArtifactJson,
+  fetchArtifactText,
+  fetchTranscript as fetchRunTranscript,
+  type QnADoc,
+} from "@/lib/runsClient";
 
 export const WORKSPACE_TOOL_ID = "workspace";
 const API_BASE = "/api/hermes";
@@ -131,34 +135,14 @@ export async function createWorkspace(
 }
 
 // ── Artifact reads (cache-busted; rewritten in place each turn) ──────────────
+// The generic cache-busted artifact-raw read lives in runsClient (shared with
+// brainstorm); these are tool-scoped wrappers bound to WORKSPACE_TOOL_ID.
 
-function bust(url: string): string {
-  return `${url}${url.includes("?") ? "&" : "?"}_t=${Date.now()}`;
-}
+const fetchJson = <T>(runId: string, path: string, signal?: AbortSignal) =>
+  fetchArtifactJson<T>(WORKSPACE_TOOL_ID, runId, path, signal);
 
-async function fetchJson<T>(runId: string, path: string, signal?: AbortSignal): Promise<T | null> {
-  const res = await fetch(bust(artifactRawUrl(WORKSPACE_TOOL_ID, runId, path)), {
-    signal,
-    cache: "no-store",
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`fetch ${path} failed: ${res.status}`);
-  try {
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchText(runId: string, path: string, signal?: AbortSignal): Promise<string | null> {
-  const res = await fetch(bust(artifactRawUrl(WORKSPACE_TOOL_ID, runId, path)), {
-    signal,
-    cache: "no-store",
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`fetch ${path} failed: ${res.status}`);
-  return res.text();
-}
+const fetchText = (runId: string, path: string, signal?: AbortSignal) =>
+  fetchArtifactText(WORKSPACE_TOOL_ID, runId, path, signal);
 
 export function fetchWorkspaceState(runId: string, signal?: AbortSignal) {
   return fetchJson<WorkspaceState>(runId, "workspace.json", signal);
@@ -175,14 +159,8 @@ export function fetchWorkspaceQna(runId: string, featureSlug?: string, signal?: 
 }
 
 /** Replay a (non-live) workspace run's execution log from its transcripts. */
-export async function fetchTranscript(runId: string, signal?: AbortSignal): Promise<RunEvent[]> {
-  const res = await fetch(
-    `${API_BASE}/v1/tools/${WORKSPACE_TOOL_ID}/runs/${encodeURIComponent(runId)}/transcript`,
-    { signal, cache: "no-store" },
-  );
-  if (!res.ok) return [];
-  const data = (await res.json()) as { events?: RunEvent[] };
-  return data.events ?? [];
+export function fetchTranscript(runId: string, signal?: AbortSignal): Promise<RunEvent[]> {
+  return fetchRunTranscript(WORKSPACE_TOOL_ID, runId, signal);
 }
 // Design view = the OpenSpec change's proposal (why/what/impact) + design.md
 // (technical decisions), concatenated. Legacy fallback: architecture.md.

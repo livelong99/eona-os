@@ -7,15 +7,26 @@
 import {
   runTool,
   sendRunMessage,
-  artifactRawUrl,
   getArtifacts,
   type RunEvent,
   type RunResult,
 } from "@/lib/labs/toolsClient";
+import {
+  fetchArtifactJson,
+  fetchArtifactText,
+  fetchTranscript as fetchRunTranscript,
+  type BrainstormPhase,
+  type QnAQuestion,
+  type QnADoc,
+} from "@/lib/runsClient";
 
 export const BRAINSTORM_TOOL_ID = "brainstorm";
 
 const API_BASE = "/api/hermes";
+
+// The qna.json shape (shared with the workspace tool) lives in runsClient; keep
+// re-exporting it here so brainstorm callers' imports stay unchanged.
+export type { BrainstormPhase, QnAQuestion, QnADoc };
 
 /** Kebab-case a project name into its slug — mirrors the engine's _kebab so the
  * deep-link route id matches the artifacts/runs-latest lookup. */
@@ -29,31 +40,9 @@ export function slugify(text: string): string {
 }
 
 // ── Artifact shapes (mirror the engine JSON schemas) ─────────────────────────
-
-export type BrainstormPhase = "clarifying" | "prd-ready";
-
-export interface QnAQuestion {
-  id: string;
-  agent?: string;
-  category?: string;
-  question: string;
-  why?: string;
-  answer?: string;
-  answered: boolean;
-  round?: number;
-}
-
-export interface QnADoc {
-  project: string;
-  slug: string;
-  brief?: string;
-  phase: BrainstormPhase;
-  round?: number;
-  summary?: string;
-  open_count?: number;
-  answered_count?: number;
-  questions: QnAQuestion[];
-}
+// BrainstormPhase / QnAQuestion / QnADoc are the shared qna.json contract and
+// live in runsClient (re-exported above). The readiness shapes are brainstorm-
+// specific and stay here.
 
 export type ReadinessKey =
   | "creativity"
@@ -119,67 +108,30 @@ export async function sendAnswers(
 }
 
 // ── Artifact fetch (qna.json / readiness.json / prd.md) ──────────────────────
-
-// Cache-bust every artifact read: these files are rewritten in place each round,
-// and a cached response would show stale qna/readiness after a refresh.
-function bust(url: string): string {
-  return `${url}${url.includes("?") ? "&" : "?"}_t=${Date.now()}`;
-}
-
-async function fetchArtifactJson<T>(
-  runId: string,
-  path: string,
-  signal?: AbortSignal,
-): Promise<T | null> {
-  const res = await fetch(bust(artifactRawUrl(BRAINSTORM_TOOL_ID, runId, path)), {
-    signal,
-    cache: "no-store",
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`fetch ${path} failed: ${res.status}`);
-  try {
-    return (await res.json()) as T;
-  } catch {
-    return null;
-  }
-}
+// The cache-busted artifact-raw read + transcript replay live in runsClient
+// (shared with the workspace tool); these are thin per-tool wrappers.
 
 /** Replay a (non-live) run's full execution log from its persisted transcripts.
  * Returns the same RunEvent shapes the live stream emits, so the hook can rebuild
  * the agent lanes after a refresh. */
-export async function fetchTranscript(
-  runId: string,
-  signal?: AbortSignal,
-): Promise<RunEvent[]> {
-  const res = await fetch(
-    `${API_BASE}/v1/tools/${BRAINSTORM_TOOL_ID}/runs/${encodeURIComponent(runId)}/transcript`,
-    { signal, cache: "no-store" },
-  );
-  if (!res.ok) return [];
-  const data = (await res.json()) as { events?: RunEvent[] };
-  return data.events ?? [];
+export function fetchTranscript(runId: string, signal?: AbortSignal): Promise<RunEvent[]> {
+  return fetchRunTranscript(BRAINSTORM_TOOL_ID, runId, signal);
 }
 
 export function fetchQna(runId: string, signal?: AbortSignal): Promise<QnADoc | null> {
-  return fetchArtifactJson<QnADoc>(runId, "qna.json", signal);
+  return fetchArtifactJson<QnADoc>(BRAINSTORM_TOOL_ID, runId, "qna.json", signal);
 }
 
 export function fetchReadiness(
   runId: string,
   signal?: AbortSignal,
 ): Promise<ReadinessDoc | null> {
-  return fetchArtifactJson<ReadinessDoc>(runId, "readiness.json", signal);
+  return fetchArtifactJson<ReadinessDoc>(BRAINSTORM_TOOL_ID, runId, "readiness.json", signal);
 }
 
 /** Raw markdown text of the PRD (null until the PM drafts it). */
-export async function fetchPrd(runId: string, signal?: AbortSignal): Promise<string | null> {
-  const res = await fetch(bust(artifactRawUrl(BRAINSTORM_TOOL_ID, runId, "prd.md")), {
-    signal,
-    cache: "no-store",
-  });
-  if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`fetch prd.md failed: ${res.status}`);
-  return res.text();
+export function fetchPrd(runId: string, signal?: AbortSignal): Promise<string | null> {
+  return fetchArtifactText(BRAINSTORM_TOOL_ID, runId, "prd.md", signal);
 }
 
 /** True once any of the brainstorm artifacts exist for the run. */
