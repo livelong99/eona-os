@@ -1,5 +1,5 @@
 <!--
-  NOTE FOR MAINTAINER: badges/links assume the repo is github.com/livelong99/agent-home.
+  NOTE FOR MAINTAINER: badges/links assume the repo is github.com/livelong99/eona-os.
   Add a real hero screenshot/GIF under docs/screenshots/ (see the Screenshots section).
 -->
 
@@ -13,7 +13,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-22c55e.svg?style=flat-square)](LICENSE)
 [![Built on Hermes Agent](https://img.shields.io/badge/built%20on-Hermes%20Agent-7c5cff.svg?style=flat-square)](https://github.com/NousResearch/hermes-agent)
-[![CI](https://img.shields.io/github/actions/workflow/status/livelong99/agent-home/ci.yml?branch=main&style=flat-square)](https://github.com/livelong99/agent-home/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/livelong99/eona-os/ci.yml?branch=main&style=flat-square)](https://github.com/livelong99/eona-os/actions/workflows/ci.yml)
 [![Python 3.11–3.13](https://img.shields.io/badge/python-3.11–3.13-3776AB.svg?style=flat-square&logo=python&logoColor=white)](engine/pyproject.toml)
 [![React 19 + Vite](https://img.shields.io/badge/React%2019-Vite%206-61DAFB.svg?style=flat-square&logo=react&logoColor=white)](dashboard/package.json)
 [![Docker Compose](https://img.shields.io/badge/Docker-Compose%20v2-2496ED.svg?style=flat-square&logo=docker&logoColor=white)](docker-compose.yml)
@@ -117,7 +117,7 @@ A five-layer, local-first stack. Full detail in [`docs/architecture.md`](docs/ar
 
 ```bash
 # 1. Clone
-git clone https://github.com/livelong99/agent-home.git
+git clone https://github.com/livelong99/eona-os.git
 cd agent-home
 
 # 2. Seed config + secrets and build the stack
@@ -182,7 +182,7 @@ Non-secret config (agent profiles, tool settings, bundled skills) lives in [`her
 - [ ] Skill marketplace / registry
 - [ ] Windows-native (non-WSL) support
 
-Have an idea? [Open a feature request](https://github.com/livelong99/agent-home/issues/new/choose).
+Have an idea? [Open a feature request](https://github.com/livelong99/eona-os/issues/new/choose).
 
 ---
 

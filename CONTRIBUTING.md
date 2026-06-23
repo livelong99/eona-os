@@ -6,8 +6,8 @@ By participating you agree to abide by our [Code of Conduct](CODE_OF_CONDUCT.md)
 
 ## Ways to contribute
 
-- 🐛 **Report a bug** — open a [bug report](https://github.com/livelong99/agent-home/issues/new/choose) with steps to reproduce.
-- 💡 **Request a feature** — open a [feature request](https://github.com/livelong99/agent-home/issues/new/choose) describing the problem, not just the solution.
+- 🐛 **Report a bug** — open a [bug report](https://github.com/livelong99/eona-os/issues/new/choose) with steps to reproduce.
+- 💡 **Request a feature** — open a [feature request](https://github.com/livelong99/eona-os/issues/new/choose) describing the problem, not just the solution.
 - 🧩 **Add a skill** — drop a `SKILL.md` + `tool.yaml` under the engine's skills path; it becomes discoverable at `/v1/tools`.
 - 🎨 **Polish the dashboard** — UI/UX, accessibility, performance.
 - 📖 **Improve docs** — even fixing a typo helps the next person.
@@ -19,7 +19,7 @@ If your change is large or architectural, please open an issue to discuss it **b
 > Prerequisites: Docker Desktop (Compose v2), the `claude` CLI, Node.js 22 LTS, and Python 3.11–3.13.
 
 ```bash
-git clone https://github.com/livelong99/agent-home.git
+git clone https://github.com/livelong99/eona-os.git
 cd agent-home
 
 # Dashboard (Vite + React)

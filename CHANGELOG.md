@@ -25,5 +25,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Docker Compose stack with all services bound to `127.0.0.1`.
 - `scripts/install.sh` one-shot setup and `scripts/doctor.sh` health checks.
 
-[Unreleased]: https://github.com/livelong99/agent-home/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/livelong99/agent-home/releases/tag/v1.0.0
+[Unreleased]: https://github.com/livelong99/eona-os/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/livelong99/eona-os/releases/tag/v1.0.0
