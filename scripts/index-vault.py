@@ -30,7 +30,10 @@ QDRANT_URL = os.environ.get("QDRANT_URL", "http://127.0.0.1:6533").rstrip("/")
 VAULT_DIR = Path(
     os.environ.get(
         "VAULT_DIR",
-        "/Users/perkypanda/Documents/Obsidian/Vault/10_Projects/agent-home",
+        os.environ.get(
+            "HERMES_VAULT_PATH",
+            os.path.expanduser("~/Documents/Obsidian/Vault/10_Projects/agent-home"),
+        ),
     )
 )
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "gemini-embedding-001")

@@ -30,7 +30,10 @@ HOST = os.environ.get("BRIDGE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("BRIDGE_PORT", "8765"))
 CWD = os.environ.get(
     "CLAUDE_BRIDGE_CWD",
-    "/Users/perkypanda/Documents/Obsidian/Vault/10_Projects/agent-home",
+    os.environ.get(
+        "HERMES_VAULT_PATH",
+        os.path.expanduser("~/Documents/Obsidian/Vault/10_Projects/agent-home"),
+    ),
 )
 PERMISSION_MODE = os.environ.get("CLAUDE_PERMISSION_MODE", "default")
 TIMEOUT = int(os.environ.get("CLAUDE_BRIDGE_TIMEOUT", "600"))

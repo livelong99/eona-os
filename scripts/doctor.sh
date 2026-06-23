@@ -3,7 +3,7 @@
 set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VAULT="/Users/perkypanda/Documents/Obsidian/Vault"
+VAULT="${HERMES_VAULT_PATH:-${HOME}/Documents/Obsidian/Vault}"
 ENV_FILE="${HOME}/.hermes/.env"
 fail=0
 ok()   { printf "\033[1;32m✓ %s\033[0m\n" "$*"; }

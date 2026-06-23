@@ -39,7 +39,10 @@ logger = logging.getLogger(__name__)
 _DEFAULT_VAULT = Path(
     os.environ.get(
         "VAULT_DIR",
-        "/Users/perkypanda/Documents/Obsidian/Vault",
+        os.environ.get(
+            "HERMES_VAULT_PATH",
+            os.path.expanduser("~/Documents/Obsidian/Vault"),
+        ),
     )
 )
 

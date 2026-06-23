@@ -93,8 +93,9 @@ reads. The dashboard is a viewer/controller over Hermes' REST API plus a Claude 
   the engine — stays on the upstream upgrade path.
 
 ### B. Memory — Obsidian vault (shared brain)
-- Reuse the existing vault at `/Users/perkypanda/Documents/Obsidian/Vault`, scoped to the
-  `10_Projects/agent-home/` workspace so agents never roam the whole vault.
+- Reuse the existing Obsidian vault (path configured via `HERMES_VAULT_PATH`, e.g.
+  `~/Documents/Obsidian/Vault`), scoped to the `10_Projects/agent-home/` workspace so agents
+  never roam the whole vault.
 - Wire via the **Obsidian Local REST API plugin** (`:27123`) and an **Obsidian MCP server** so any MCP-aware
   agent shares one brain. Hermes stores `MCP_OBSIDIAN_API_KEY` in `~/.hermes/.env` + an `mcp_servers.obsidian`
   block in `config.yaml`.
