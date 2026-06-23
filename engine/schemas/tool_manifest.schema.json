@@ -28,7 +28,7 @@
         "properties": {
           "id": { "type": "string" },
           "label": { "type": "string" },
-          "type": { "type": "string", "enum": ["text", "textarea", "file", "file[]", "image", "image[]", "select"], "default": "text" },
+          "type": { "type": "string", "enum": ["text", "textarea", "file", "file[]", "image", "image[]", "select", "workspace"], "default": "text" },
           "required": { "type": "boolean", "default": false },
           "options": { "type": "array", "items": { "type": "string" } }
         }

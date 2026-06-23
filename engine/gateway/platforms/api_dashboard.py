@@ -1440,6 +1440,21 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
         if seed:
             user_message = f"{user_message}\n\n{seed}"
 
+        # Optional base workspace: ground the run in an existing project's context.
+        # The workspace lives under the vault (already in the swarm run's --add-dir),
+        # so the agent can read it directly — we just point it there.
+        ws_ref = inputs.get("workspace")
+        if isinstance(ws_ref, str) and ws_ref.strip():
+            ws_dir = _collection_root_for("workspace") / _kebab(ws_ref)
+            if (ws_dir / _WORKSPACE_MARKER).exists():
+                user_message += (
+                    f"\n\nBASE WORKSPACE — an existing project lives at {ws_dir}. Build this for "
+                    "that project: BEFORE asking the user anything, read its context (prd.md, "
+                    "docs/**, README*, project-context.md, openspec/project.md if present) and "
+                    "pre-fill as much of the brief as you can; only ask about what's still "
+                    "genuinely unknown."
+                )
+
         run_id = f"run_{uuid.uuid4().hex}"
         # Per-tool session: tools share continuity within a session key based on
         # the tool slug so successive launches of the same tool resume context.

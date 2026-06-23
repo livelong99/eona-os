@@ -1,7 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Play, Loader2 } from "lucide-react";
-import type { ToolInput } from "@/lib/labs/toolsClient";
-import { uploadFiles } from "@/lib/labs/toolsClient";
+import type { ToolInput, Project } from "@/lib/labs/toolsClient";
+import { uploadFiles, getProjects } from "@/lib/labs/toolsClient";
 import { UploadDropzone } from "@/components/labs/UploadDropzone";
 
 interface ToolRunFormProps {
@@ -11,7 +11,7 @@ interface ToolRunFormProps {
   onRun: (values: Record<string, unknown>) => void;
 }
 
-type Widget = "text" | "longtext" | "number" | "toggle" | "select" | "file" | "image";
+type Widget = "text" | "longtext" | "number" | "toggle" | "select" | "file" | "image" | "workspace";
 
 // Normalizes the manifest's free-form input type into a widget kind.
 function widgetFor(type: string): Widget {
@@ -20,11 +20,15 @@ function widgetFor(type: string): Widget {
   if (t === "number" || t === "int" || t === "integer" || t === "float") return "number";
   if (t === "toggle" || t === "bool" || t === "boolean" || t === "checkbox") return "toggle";
   if (t === "select" || t === "enum" || t === "choice") return "select";
+  if (t === "workspace" || t === "project-ref") return "workspace";
   if (t === "image" || t === "img" || t === "photo" || t === "picture") return "image";
   if (t === "file" || t === "upload" || t === "document" || t === "doc") return "file";
   // url and other unknowns fall back to a text field (engine takes a string).
   return "text";
 }
+
+// Field ids that name the brand/subject — auto-filled from a picked workspace.
+const NAME_FIELD_IDS = ["brand", "name", "project"];
 
 // A manifest type whose raw string ends in "[]" accepts multiple files.
 const isMulti = (type: string) => /\[\]\s*$/.test(type);
@@ -47,8 +51,34 @@ export function ToolRunForm({ toolId, inputs, busy, onRun }: ToolRunFormProps) {
   const [uploading, setUploading] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string | null>>({});
 
+  // Existing workspaces, fetched only when the form has a workspace-type input.
+  const [workspaces, setWorkspaces] = useState<Project[]>([]);
+  const hasWorkspaceInput = useMemo(
+    () => inputs.some((i) => widgetFor(i.type) === "workspace"),
+    [inputs],
+  );
+  useEffect(() => {
+    if (!hasWorkspaceInput) return;
+    let cancelled = false;
+    getProjects("workspace")
+      .then((ps) => !cancelled && setWorkspaces(ps))
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [hasWorkspaceInput]);
+
   const set = (id: string, value: unknown) =>
     setValues((prev) => ({ ...prev, [id]: value }));
+
+  // Pick a workspace → store its slug, and pre-fill the brand/name field (if empty).
+  const pickWorkspace = (inputId: string, slug: string) => {
+    set(inputId, slug);
+    const ws = workspaces.find((w) => w.id === slug);
+    if (!ws) return;
+    const nameField = inputs.find((i) => NAME_FIELD_IDS.includes(i.id) && widgetFor(i.type) !== "workspace");
+    if (nameField && !String(values[nameField.id] ?? "").trim()) {
+      set(nameField.id, ws.name || ws.id);
+    }
+  };
 
   // Replaces an input's selection and (re)uploads it, storing returned paths.
   const handleFiles = async (input: ToolInput, next: File[]) => {
@@ -189,6 +219,23 @@ export function ToolRunForm({ toolId, inputs, busy, onRun }: ToolRunFormProps) {
                 {(input.options ?? []).map((opt) => (
                   <option key={opt} value={opt} className="bg-[#13141f] text-white">
                     {opt}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {widget === "workspace" && (
+              <select
+                value={String(values[input.id] ?? "")}
+                onChange={(e) => pickWorkspace(input.id, e.target.value)}
+                className="w-full cursor-pointer rounded-lg border border-white/12 bg-white/[0.04] px-3 py-2.5 text-[13px] text-white outline-none focus:border-white/25"
+              >
+                <option value="" className="bg-[#13141f] text-white/60">
+                  {workspaces.length ? "Select a workspace…" : "No workspaces yet"}
+                </option>
+                {workspaces.map((w) => (
+                  <option key={w.id} value={w.id} className="bg-[#13141f] text-white">
+                    {w.name || w.id}
                   </option>
                 ))}
               </select>
