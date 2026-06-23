@@ -134,6 +134,30 @@ export async function createWorkspace(
   return (res.json()) as Promise<CreateResult>;
 }
 
+/**
+ * Relaunch the orchestrator against an EXISTING workspace folder (no ingest) —
+ * used when the in-memory run was lost (engine restart) so the dashboard can
+ * keep driving the workspace.
+ */
+export async function resumeWorkspace(slug: string, signal?: AbortSignal): Promise<CreateResult> {
+  const res = await fetch(`${API_BASE}/v1/tools/${WORKSPACE_TOOL_ID}/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ slug }),
+    signal,
+  });
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try {
+      detail = ((await res.json()) as { detail?: string }).detail || detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  return (res.json()) as Promise<CreateResult>;
+}
+
 // ── Artifact reads (cache-busted; rewritten in place each turn) ──────────────
 // The generic cache-busted artifact-raw read lives in runsClient (shared with
 // brainstorm); these are tool-scoped wrappers bound to WORKSPACE_TOOL_ID.

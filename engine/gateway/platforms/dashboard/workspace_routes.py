@@ -139,6 +139,81 @@ def register(app: "Any", adapter: "Any") -> None:
         )
 
     # ------------------------------------------------------------------
+    # POST /v1/tools/workspace/resume — relaunch the orchestrator against an
+    # EXISTING workspace folder (no ingest, no re-provision of the team). Used
+    # when the in-memory run was lost (engine restart) so the dashboard can keep
+    # driving the workspace. Body {slug}. 202 → {workspace_id, run_id, session_id, path}.
+    # ------------------------------------------------------------------
+    async def _workspace_resume(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_json"}, status=400)
+        body = body if isinstance(body, dict) else {}
+        slug = _ad._kebab(body.get("slug") if isinstance(body.get("slug"), str) else "")
+        if not slug:
+            return web.json_response({"error": "invalid_request", "detail": "require slug"}, status=400)
+        dest = _ad._collection_root_for("workspace") / slug
+        if not (dest / _ad._WORKSPACE_MARKER).exists():
+            return web.json_response({"error": "not_a_workspace", "detail": "unknown workspace"}, status=404)
+
+        # Recover the display name from workspace.json (else the marker).
+        name = slug
+        for src_file in (dest / "workspace.json", dest / _ad._WORKSPACE_MARKER):
+            try:
+                name = (json.loads(src_file.read_text(encoding="utf-8")) or {}).get("name") or name
+                break
+            except Exception:
+                continue
+
+        try:
+            from tools.tool_manifest import discover_manifests
+            manifest = {m.tool: m for m in discover_manifests()}.get("workspace")
+        except Exception as exc:
+            logger.exception("workspace resume: manifest load failed")
+            return web.json_response({"error": "manifest_error", "detail": str(exc)}, status=500)
+        if manifest is None:
+            return web.json_response({"error": "tool_not_found", "detail": "workspace manifest missing"}, status=404)
+
+        skill = manifest.skill
+        inputs = {"name": name, "source_type": "resume", "source_ref": slug}
+        user_message = (
+            f"/{skill}\n\nResume the EXISTING workspace at SESSION_FOLDER — it is already ingested and "
+            "provisioned. Read workspace.json to recover the current phase + active_feature and continue "
+            "from there. Do NOT re-ingest or re-generate the team; greet briefly and tell the user where "
+            "things stand and what's the next gate.\n\n"
+            f"Inputs: {json.dumps(inputs, ensure_ascii=False)}"
+        )
+        run_id = f"run_{uuid.uuid4().hex}"
+        session_id = f"tool-workspace-{uuid.uuid4().hex[:8]}"
+        record: Dict[str, Any] = {
+            "session_id": session_id, "tool_id": "workspace", "inputs": inputs,
+            "brand": name, "claude_session_id": None, "created": time.time(),
+            "completed": False, "busy": True, "run_cwd": str(dest),
+        }
+        _ad._run_registry()[run_id] = record
+        _ad._persist_run(run_id, record)
+
+        try:
+            folder = _ad._provision_swarm_session(manifest, slug, name, "")  # idempotent
+            if folder is not None:
+                user_message += (
+                    "\n\nSESSION_FOLDER (absolute path — your cwd, the workspace root; write every "
+                    f"artifact here): {folder}"
+                )
+        except Exception:
+            logger.warning("workspace resume provision failed for %s", slug, exc_info=True)
+
+        _ad._start_run(adapter, run_id, user_message, session_id, run_record=record,
+                       append_system_prompt=_ad._STEP_GATE_SYSTEM_PROMPT, swarm=True, run_cwd=str(dest))
+        return web.json_response(
+            {"workspace_id": slug, "run_id": run_id, "session_id": session_id, "path": str(dest)},
+            status=202,
+        )
+
+    # ------------------------------------------------------------------
     # POST /v1/tools/workspace/exec — run a workspace's build/run/test script
     # (scripts/{script}.sh) in the workspace folder and stream stdout/stderr as
     # SSE (`data: {type,...}` frames). Body {slug, script: build|run|test}. Only
@@ -384,6 +459,7 @@ def register(app: "Any", adapter: "Any") -> None:
 
     # Literal routes before the generic {tool_id} routes so they aren't shadowed.
     app.router.add_post("/v1/tools/workspace/create", _workspace_create)
+    app.router.add_post("/v1/tools/workspace/resume", _workspace_resume)
     app.router.add_get("/v1/tools/workspace/browse", _workspace_browse)
     app.router.add_post("/v1/tools/workspace/rename", _workspace_rename)
     app.router.add_post("/v1/tools/workspace/exec", _workspace_exec)

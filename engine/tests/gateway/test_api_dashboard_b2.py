@@ -667,3 +667,32 @@ def test_collection_root_builtin_tool_not_clamped(tmp_path, monkeypatch):
     with patch.object(ad, "_manifest_for", return_value=builtin):
         root = ad._collection_root_for("workspace")
     assert root == tmp_path / "anywhere"
+
+
+@pytest.mark.asyncio
+async def test_workspace_resume(tmp_path, monkeypatch):
+    """Resume relaunches an existing workspace (no ingest): 404 unknown, 400 no
+    slug, 202 + a registered run record (run_cwd + recovered name) for a real one."""
+    import json as _json
+    from gateway.platforms import api_dashboard as d
+
+    monkeypatch.setenv("HERMES_WORKSPACES_ROOT", str(tmp_path / "10_Projects"))
+    ws = tmp_path / "10_Projects" / "deck"
+    ws.mkdir(parents=True)
+    d._write_workspace_marker(ws, {"name": "Deck", "slug": "deck"})
+    (ws / "workspace.json").write_text(_json.dumps({"name": "Deck Heads", "phase": "ready"}), encoding="utf-8")
+    # Stub the launch so no real claude run starts.
+    monkeypatch.setattr(d, "_start_run", lambda *a, **k: None)
+    monkeypatch.setattr(d, "_provision_swarm_session", lambda *a, **k: str(ws))
+
+    adapter = _make_adapter()
+    app = _create_dashboard_app(adapter)
+    async with TestClient(TestServer(app)) as client:
+        assert (await client.post("/v1/tools/workspace/resume", json={"slug": "nope"})).status == 404
+        assert (await client.post("/v1/tools/workspace/resume", json={})).status == 400
+        r = await client.post("/v1/tools/workspace/resume", json={"slug": "deck"})
+        assert r.status == 202
+        data = await r.json()
+        assert data["workspace_id"] == "deck" and data["run_id"].startswith("run_")
+        rec = d._run_registry()[data["run_id"]]
+        assert rec["run_cwd"] == str(ws) and rec["brand"] == "Deck Heads" and rec["tool_id"] == "workspace"

@@ -19,6 +19,7 @@ import { useWorkspaceRun } from "@/components/workspace/useWorkspaceRun";
 import {
   getLatestRun,
   getRunStatus,
+  resumeWorkspace,
   WORKSPACE_TOOL_ID,
 } from "@/lib/workspace/workspaceClient";
 
@@ -80,6 +81,22 @@ export function WorkspaceDetail() {
   const [view, setView] = useState<"design" | "epics" | "qna">("design");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [showLogs, setShowLogs] = useState(false);
+  const [resuming, setResuming] = useState(false);
+
+  // Relaunch the orchestrator against the existing folder when there's no live
+  // run (e.g. the in-memory run was lost on an engine restart).
+  const resume = async () => {
+    if (resuming) return;
+    setResuming(true);
+    try {
+      const r = await resumeWorkspace(slug);
+      setResolved({ phase: "ready", runId: r.run_id, live: true });
+    } catch {
+      /* stays missing; the Resume button remains for another try */
+    } finally {
+      setResuming(false);
+    }
+  };
 
   // Workspace SETUP lifecycle (top-level phase) vs. the per-feature cycle.
   const setupPhase = phase === "ingesting" || phase === "provisioning" || phase === "documenting";
@@ -113,7 +130,13 @@ export function WorkspaceDetail() {
 
   const send = async () => {
     const text = composer.trim();
-    if (!text || streaming) return;
+    if (!text || streaming || resuming) return;
+    // No live run (e.g. after an engine restart) — resume first and keep the
+    // typed text so it isn't lost; the user can send once the run is live.
+    if (!resolved.runId) {
+      await resume();
+      return;
+    }
     setComposer("");
     await directive(text);
   };
@@ -227,7 +250,21 @@ export function WorkspaceDetail() {
                   <Loader className="h-4 w-4 animate-spin text-white/50" /> Resolving run…
                 </Centered>
               ) : resolved.phase === "missing" ? (
-                <Centered>No run found for this workspace yet.</Centered>
+                <div className="flex h-full flex-col items-center justify-center gap-4 px-6 text-center">
+                  <p className="max-w-md text-[13px] leading-relaxed text-white/55">
+                    No live run for this workspace — the orchestrator session ended (or the engine
+                    restarted). Resume it to keep working; your project + team are intact on disk.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={resume}
+                    disabled={resuming}
+                    className="flex items-center gap-2 rounded-lg bg-[#5227FF] px-4 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-[#6438ff] disabled:opacity-50 cursor-pointer"
+                  >
+                    {resuming ? <Loader className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+                    {resuming ? "Resuming…" : "Resume workspace"}
+                  </button>
+                </div>
               ) : (
                 <ExecutionConsole lanes={lanes} streaming={streaming} selectedId={selectedAgent} />
               )}
