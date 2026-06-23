@@ -27,17 +27,18 @@ const ControlScreen = lazy(() => named(import("@/screens/ControlScreen"), "Contr
 const IntegrationsScreen = lazy(() => named(import("@/screens/IntegrationsScreen"), "IntegrationsScreen"));
 const PlannerScreen = lazy(() => named(import("@/screens/PlannerScreen"), "PlannerScreen"));
 
-// Top deck icons — custom Agent OS liquid-glass icons (one per page). Each maps
-// to a route. PNGs live in public/icons (background-stripped squircles).
+// Top deck icons — custom Agent OS app icons (one per page). Each maps to a
+// route. Light-theme set lives in public/icons/light as full-bleed square
+// images (light background); the dock rounds the corners in CSS at render time.
 const baseIcons: (Omit<DockIcon, "active" | "onClick"> & { route: string })[] = [
-  { src: "/icons/home.png", alt: "Home", route: "/" },
-  { src: "/icons/workspace.png", alt: "Workspace", route: "/workspace" },
-  { src: "/icons/brainstorm.png", alt: "Brainstorm", route: "/brainstorm" },
-  { src: "/icons/labs.png", alt: "Labs", route: "/labs" },
-  { src: "/icons/memory.png", alt: "Memory", route: "/memory" },
-  { src: "/icons/control.png", alt: "Control", route: "/control" },
-  { src: "/icons/integrations.png", alt: "Integrations", route: "/integrations" },
-  { src: "/icons/planner.png", alt: "Planner", route: "/planner" },
+  { src: "/icons/light/home.jpeg", alt: "Home", route: "/" },
+  { src: "/icons/light/workspace.jpeg", alt: "Workspace", route: "/workspace" },
+  { src: "/icons/light/brainstorm.jpeg", alt: "Brainstorm", route: "/brainstorm" },
+  { src: "/icons/light/labs.jpeg", alt: "Labs", route: "/labs" },
+  { src: "/icons/light/memory.jpeg", alt: "Memory", route: "/memory" },
+  { src: "/icons/light/control.jpeg", alt: "Control", route: "/control" },
+  { src: "/icons/light/integrations.jpeg", alt: "Integrations", route: "/integrations" },
+  { src: "/icons/light/planner.jpeg", alt: "Planner", route: "/planner" },
 ];
 
 // SideRays background speed. Home is the showcase; every other screen runs the

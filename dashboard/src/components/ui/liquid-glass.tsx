@@ -112,7 +112,7 @@ export const GlassDock: React.FC<{
             <img
               src={icon.src}
               alt={icon.alt}
-              className={`${sizeClass} transition-all duration-700 hover:scale-110 cursor-pointer`}
+              className={`${sizeClass} rounded-[22%] object-cover transition-all duration-700 hover:scale-110 cursor-pointer`}
               style={tween}
               onClick={icon.onClick}
             />
