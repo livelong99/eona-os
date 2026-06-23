@@ -545,3 +545,125 @@ def test_tool_forge_discovered_as_swarm_template_excluded():
     assert [s.id for s in forge.steps] == ["discover", "author", "validate"]
     assert not any("template" in t for t in ms)  # tool.yaml.tmpl must not match discovery
     assert _manifest_to_dict(forge)["swarm"] is True
+
+
+# ---------------------------------------------------------------------------
+# Fix #1: artifact-raw endpoints reject symlinked files (anti-exfiltration)
+# ---------------------------------------------------------------------------
+
+
+def test_artifact_is_symlinked_rejects_symlink_file(tmp_path):
+    """A symlink planted in the artifact dir is rejected even when its target
+    resolves back inside the same root (validate_within_dir would pass it)."""
+    from gateway.platforms.api_dashboard import _artifact_is_symlinked
+
+    root = tmp_path / "brand"
+    root.mkdir()
+    real = root / "real.html"
+    real.write_text("<h1>ok</h1>")
+    link = root / "link.html"
+    link.symlink_to(real)  # target IS inside root → containment alone passes
+
+    assert _artifact_is_symlinked(link, root) is True
+    assert _artifact_is_symlinked(real, root) is False
+
+
+def test_artifact_is_symlinked_rejects_symlinked_parent(tmp_path):
+    """A symlinked intermediate directory component is also rejected."""
+    from gateway.platforms.api_dashboard import _artifact_is_symlinked
+
+    root = tmp_path / "brand"
+    real_dir = root / "real_sub"
+    real_dir.mkdir(parents=True)
+    (real_dir / "f.html").write_text("x")
+    link_dir = root / "sub"
+    link_dir.symlink_to(real_dir)
+
+    # candidate path goes through the symlinked dir component
+    assert _artifact_is_symlinked(link_dir / "f.html", root) is True
+    # the genuine path through the real dir is fine
+    assert _artifact_is_symlinked(real_dir / "f.html", root) is False
+
+
+def test_artifact_is_symlinked_escaping_target(tmp_path):
+    """A symlink whose target escapes the host root is rejected too."""
+    from gateway.platforms.api_dashboard import _artifact_is_symlinked
+
+    secret = tmp_path / "secret.txt"
+    secret.write_text("topsecret")
+    root = tmp_path / "brand"
+    root.mkdir()
+    link = root / "leak.txt"
+    link.symlink_to(secret)
+
+    assert _artifact_is_symlinked(link, root) is True
+
+
+# ---------------------------------------------------------------------------
+# Fix #2: USER-authored tools' artifacts_root is clamped to approved bases
+# ---------------------------------------------------------------------------
+
+
+def test_collection_root_clamps_escaping_user_tool(tmp_path, monkeypatch):
+    """A user-authored tool whose artifacts_root escapes /opt/data + the vault is
+    clamped to the Brands root rather than honoured."""
+    from gateway.platforms import api_dashboard as ad
+
+    data_root = tmp_path / "data"
+    user_tools = data_root / "skills"
+    user_tools.mkdir(parents=True)
+    vault = tmp_path / "vault"
+    vault.mkdir()
+    monkeypatch.setenv("HERMES_USER_TOOLS_ROOT", str(user_tools))
+    monkeypatch.setenv("HERMES_VAULT_PATH", str(vault))
+
+    # Manifest discovered UNDER the writable user-tools root, pointing OUTSIDE
+    # every approved base (straight at /etc).
+    evil = MagicMock()
+    evil.tool = "evil"
+    evil.artifacts_root = "/etc/{x}/"
+    evil.source_path = str(user_tools / "evil" / "tool.yaml")
+
+    with patch.object(ad, "_manifest_for", return_value=evil):
+        root = ad._collection_root_for("evil")
+    assert root == ad._brands_root()
+
+
+def test_collection_root_allows_contained_user_tool(tmp_path, monkeypatch):
+    """A user-authored tool whose artifacts_root stays inside /opt/data is honoured."""
+    from gateway.platforms import api_dashboard as ad
+
+    data_root = tmp_path / "data"
+    user_tools = data_root / "skills"
+    user_tools.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_USER_TOOLS_ROOT", str(user_tools))
+    monkeypatch.delenv("HERMES_VAULT_PATH", raising=False)
+
+    ok = MagicMock()
+    ok.tool = "ok"
+    ok.artifacts_root = str(data_root / "ok-out") + "/{x}/"
+    ok.source_path = str(user_tools / "ok" / "tool.yaml")
+
+    with patch.object(ad, "_manifest_for", return_value=ok):
+        root = ad._collection_root_for("ok")
+    assert root == data_root / "ok-out"
+
+
+def test_collection_root_builtin_tool_not_clamped(tmp_path, monkeypatch):
+    """A built-in tool (manifest OUTSIDE the user-tools root) keeps its artifacts_root
+    even when it points outside the approved bases — built-ins are trusted."""
+    from gateway.platforms import api_dashboard as ad
+
+    user_tools = tmp_path / "data" / "skills"
+    user_tools.mkdir(parents=True)
+    monkeypatch.setenv("HERMES_USER_TOOLS_ROOT", str(user_tools))
+
+    builtin = MagicMock()
+    builtin.tool = "workspace"
+    builtin.artifacts_root = str(tmp_path / "anywhere") + "/{name}/"
+    # source_path lives under a read-only repo root, NOT the user-tools root.
+    builtin.source_path = str(tmp_path / "repo" / "skills" / "workspace" / "tool.yaml")
+
+    with patch.object(ad, "_manifest_for", return_value=builtin):
+        root = ad._collection_root_for("workspace")
+    assert root == tmp_path / "anywhere"

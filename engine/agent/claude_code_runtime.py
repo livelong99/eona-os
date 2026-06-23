@@ -1070,11 +1070,21 @@ class ClaudeCodeSession:
         except subprocess.TimeoutExpired:
             proc.kill()
             err = f"claude -p timed out after {self.timeout}s"
+            # Reap the killed process and drain its pipes without blocking on
+            # stderr inherited by swarm sub-agents. communicate() handles both;
+            # a second timeout means a child is still holding the pipe — give up.
+            try:
+                proc.communicate(timeout=5)
+            except (subprocess.TimeoutExpired, OSError, ValueError):
+                pass
         finally:
             if tailer is not None:
                 tailer.stop()
         if err is None and proc.returncode not in (0, None) and not final_text:
-            stderr = (proc.stderr.read() if proc.stderr else "")[:500]
+            try:
+                stderr = (proc.stderr.read() if proc.stderr else "")[:500]
+            except (OSError, ValueError):
+                stderr = ""
             err = f"claude exited {proc.returncode}: {stderr.strip()}"
 
         self.session_id = session_id or self.session_id

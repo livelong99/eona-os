@@ -404,6 +404,37 @@ def _artifact_content_type(name: str) -> str:
     }.get(ext, "application/octet-stream")
 
 
+def _artifact_is_symlinked(candidate: Path, root: Path) -> bool:
+    """True when *candidate* (or any path component between *root* and it) is a
+    symlink, OR the resolved real path diverges from the lexical path.
+
+    A launched agent with Write+Bash can plant a symlink inside the artifact dir
+    pointing at an arbitrary host file; ``validate_within_dir`` follows symlinks
+    via ``resolve()``, so a link whose target also resolves inside *root* would
+    still pass containment. Rejecting any symlinked component closes that hole —
+    the raw endpoints serve only genuine regular files written under *root*."""
+    try:
+        root_resolved = root.resolve()
+        # Walk the LEXICAL candidate path (not resolve()'d — that would erase the
+        # very symlinks we're hunting). Each component from root → candidate must
+        # be a real (non-symlink) entry. The root itself may legitimately be a
+        # symlink (e.g. a mounted dir), so we start checking *below* it.
+        try:
+            rel = candidate.relative_to(root)
+        except ValueError:
+            # Not lexically under root → suspect (containment is enforced upstream).
+            return True
+        cur = root_resolved
+        for part in rel.parts:
+            cur = cur / part
+            if cur.is_symlink():
+                return True
+        # Final guard: the symlink-free lexical path must equal the real path.
+        return candidate.resolve() != (root_resolved / rel)
+    except OSError:
+        return True
+
+
 # Per-run MCP servers registered for swarm tools (e.g. the brainstorm PM). Lets
 # the orchestrating agent reach Ruflo's coordination tools (swarm_init, memory_*)
 # on top of the always-on hermes-tools server. Override the launch command via
@@ -472,12 +503,89 @@ def _root_from_manifest(manifest: Optional[Any]) -> Optional[Path]:
     return Path(os.path.expanduser(base)) if base else None
 
 
+def _user_tools_root() -> Optional[Path]:
+    """The writable root user-authored tools are installed into (host ``~/.hermes/
+    skills`` → ``/opt/data/skills`` in-container). ``HERMES_USER_TOOLS_ROOT`` is
+    the canonical env (set by compose); falls back to the last writable entry of
+    ``HERMES_TOOL_ROOTS`` so the convention matches ``tool_builder._writable_root``.
+    Returns None when neither is resolvable (no user-tools root → nothing to gate)."""
+    env = os.environ.get("HERMES_USER_TOOLS_ROOT", "").strip()
+    if env:
+        return Path(os.path.expanduser(env))
+    roots_env = os.environ.get("HERMES_TOOL_ROOTS", "").strip()
+    if roots_env:
+        parts = [p for p in roots_env.split(os.pathsep) if p.strip()]
+        if len(parts) > 1:
+            # By deployment convention the LAST entry is the writable user root.
+            return Path(os.path.expanduser(parts[-1]))
+    return None
+
+
+def _approved_artifacts_bases() -> List[Path]:
+    """Bases a USER-authored tool's ``artifacts_root`` is allowed to resolve into:
+    the writable data root (``/opt/data``) and the vault (``HERMES_VAULT_PATH``).
+    Built-in tools are exempt (their roots are trusted, repo-controlled)."""
+    bases: List[Path] = []
+    user_root = _user_tools_root()
+    if user_root is not None:
+        # ``/opt/data/skills`` → data root is its parent (``/opt/data``).
+        bases.append(user_root.parent)
+    vault = os.environ.get("HERMES_VAULT_PATH")
+    if vault:
+        bases.append(Path(os.path.expanduser(vault)))
+    return bases
+
+
+def _is_user_authored(manifest: Optional[Any]) -> bool:
+    """True when the manifest was discovered under the writable user-tools root
+    (so its ``artifacts_root`` is attacker-controllable and must be contained)."""
+    src = getattr(manifest, "source_path", None) if manifest else None
+    user_root = _user_tools_root()
+    if not src or user_root is None:
+        return False
+    try:
+        Path(src).resolve().relative_to(user_root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def _collection_root_for(tool_id: str) -> Path:
     """The artifacts base dir for a tool, taken from its manifest ``artifacts_root``
     (so each tool writes to its own — possibly writable, non-vault — location).
-    Falls back to the vault Brands root when the manifest has no template."""
-    root = _root_from_manifest(_manifest_for(tool_id))
-    return root if root is not None else _brands_root()
+    Falls back to the vault Brands root when the manifest has no template.
+
+    For USER-authored tools (manifest under the writable user-tools root), the
+    resolved root MUST stay inside an approved base (``/opt/data`` or the vault);
+    an escaping template is clamped to the Brands root rather than honoured, so a
+    user-built tool cannot redirect artifact reads at arbitrary host paths.
+    Built-in tools (read-only repo roots) are trusted and unchanged."""
+    manifest = _manifest_for(tool_id)
+    root = _root_from_manifest(manifest)
+    if root is None:
+        return _brands_root()
+    if _is_user_authored(manifest):
+        bases = _approved_artifacts_bases()
+        if bases:
+            try:
+                resolved = root.resolve()
+            except OSError:
+                return _brands_root()
+            contained = False
+            for base in bases:
+                try:
+                    resolved.relative_to(base.resolve())
+                    contained = True
+                    break
+                except (ValueError, OSError):
+                    continue
+            if not contained:
+                logger.warning(
+                    "tool %s artifacts_root %s escapes approved bases; clamping",
+                    tool_id, root,
+                )
+                return _brands_root()
+    return root
 
 
 def _artifacts_dir_for(tool_id: str, record: Dict[str, Any]) -> Optional[Path]:
@@ -1982,6 +2090,11 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
             if validate_within_dir(candidate, root) is not None:
                 continue
             any_contained = True
+            # Reject symlinked artifacts (or any symlinked path component): a
+            # launched agent could plant one to read arbitrary host files. Treat
+            # as not-found rather than serving it.
+            if _artifact_is_symlinked(candidate, root):
+                continue
             if candidate.is_file():
                 dest = candidate
                 break
@@ -2217,6 +2330,13 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
                 {"error": "path_escape",
                  "detail": "path escapes the project artifact dir"},
                 status=400,
+            )
+        # Reject symlinked artifacts (or symlinked path components): a launched
+        # agent could plant one to read arbitrary host files. 404, not served.
+        if _artifact_is_symlinked(candidate, artifacts_dir):
+            return web.json_response(
+                {"error": "file_not_found", "detail": "artifact not found"},
+                status=404,
             )
         if not candidate.is_file():
             return web.json_response(
