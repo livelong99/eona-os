@@ -724,3 +724,32 @@ async def test_workspace_git_status(tmp_path, monkeypatch):
         assert data["branch"]  # some branch name
         assert any("first commit" == c["subject"] for c in data["commits"])
         assert data["has_upstream"] is False  # no remote in the test repo
+
+
+@pytest.mark.asyncio
+async def test_workspace_git_parent_scoping_and_init(tmp_path, monkeypatch):
+    """A folder inside a parent repo reports is_repo=false (+in_parent_repo); git
+    init makes it its OWN repo with an initial commit."""
+    import os
+    import subprocess
+    from gateway.platforms import api_dashboard as d
+
+    monkeypatch.setenv("HERMES_WORKSPACES_ROOT", str(tmp_path / "10_Projects"))
+    root = tmp_path / "10_Projects"
+    root.mkdir(parents=True)
+    subprocess.run(["git", "-C", str(root), "init", "-q"], check=True, capture_output=True)  # parent repo
+    ws = root / "deck"
+    ws.mkdir()
+    d._write_workspace_marker(ws, {"name": "Deck", "slug": "deck"})
+    (ws / "file.txt").write_text("hi", encoding="utf-8")
+
+    adapter = _make_adapter()
+    app = _create_dashboard_app(adapter)
+    async with TestClient(TestServer(app)) as client:
+        s = await (await client.get("/v1/tools/workspace/git?slug=deck")).json()
+        assert s["is_repo"] is False and s.get("in_parent_repo") is True
+        r = await client.post("/v1/tools/workspace/git/init", json={"slug": "deck"})
+        assert r.status == 200 and (await r.json())["ok"] is True
+        s2 = await (await client.get("/v1/tools/workspace/git?slug=deck")).json()
+        assert s2["is_repo"] is True
+        assert any(c["subject"] == "Initial commit" for c in s2["commits"])

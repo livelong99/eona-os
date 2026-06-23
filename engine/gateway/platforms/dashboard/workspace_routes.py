@@ -35,8 +35,13 @@ def _git_status_sync(ws: Path) -> Dict[str, Any]:
         return subprocess.run([git, "-C", str(ws), *args], capture_output=True, text=True, timeout=timeout)
 
     try:
-        if run("rev-parse", "--is-inside-work-tree").returncode != 0:
+        if run("rev-parse", "--is-inside-work-tree").stdout.strip() != "true":
             return {"is_repo": False}
+        # Only the workspace's OWN repo counts — if `git` resolves to a PARENT
+        # repo (e.g. the vault the folder sits in), the workspace isn't a repo.
+        toplevel = run("rev-parse", "--show-toplevel").stdout.strip()
+        if not toplevel or Path(toplevel).resolve() != ws.resolve():
+            return {"is_repo": False, "in_parent_repo": True}
     except Exception:
         return {"is_repo": False}
 
@@ -64,6 +69,29 @@ def _git_status_sync(ws: Path) -> Dict[str, Any]:
         "is_repo": True, "branch": branch, "remote": remote, "dirty": dirty,
         "ahead": ahead, "behind": behind, "has_upstream": has_upstream, "commits": commits,
     }
+
+
+def _git_init_sync(ws: Path) -> Dict[str, Any]:
+    """Initialize a git repo FOR THIS FOLDER (its own repo, even if it sits inside
+    a parent repo) and make an initial commit so the branch + history show."""
+    import subprocess
+    git = os.environ.get("GIT_BIN", "git")
+    ident = ["-c", "user.name=Agent OS", "-c", "user.email=agent-os@local"]
+    try:
+        init = subprocess.run([git, "-C", str(ws), "init"], capture_output=True, text=True, timeout=30)
+        if init.returncode != 0:
+            return {"ok": False, "output": (init.stderr or init.stdout).strip()[:1000]}
+        subprocess.run([git, "-C", str(ws), "add", "-A"], capture_output=True, text=True, timeout=60)
+        commit = subprocess.run(
+            [git, "-C", str(ws), *ident, "commit", "-m", "Initial commit", "--allow-empty"],
+            capture_output=True, text=True, timeout=60,
+        )
+        out = (commit.stdout + commit.stderr).strip()
+        return {"ok": True, "output": out[:1000] or "initialized"}
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "output": "git init timed out"}
+    except Exception as exc:
+        return {"ok": False, "output": str(exc)}
 
 
 def _git_push_sync(ws: Path) -> Dict[str, Any]:
@@ -546,6 +574,25 @@ def register(app: "Any", adapter: "Any") -> None:
         res = await asyncio.get_running_loop().run_in_executor(None, _git_push_sync, ws)
         return web.json_response(res, status=(200 if res.get("ok") else 502))
 
+    # POST /v1/tools/workspace/git/init — initialize a git repo for the workspace
+    # folder (its own repo) + an initial commit. Body {slug}.
+    async def _workspace_git_init(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid_json"}, status=400)
+        body = body if isinstance(body, dict) else {}
+        slug = _ad._kebab(body.get("slug") if isinstance(body.get("slug"), str) else "")
+        if not slug:
+            return web.json_response({"error": "invalid_request", "detail": "require slug"}, status=400)
+        ws = _ad._collection_root_for("workspace") / slug
+        if not (ws / _ad._WORKSPACE_MARKER).exists():
+            return web.json_response({"error": "not_a_workspace", "detail": "unknown workspace"}, status=404)
+        res = await asyncio.get_running_loop().run_in_executor(None, _git_init_sync, ws)
+        return web.json_response(res, status=(200 if res.get("ok") else 502))
+
     # Literal routes before the generic {tool_id} routes so they aren't shadowed.
     app.router.add_post("/v1/tools/workspace/create", _workspace_create)
     app.router.add_post("/v1/tools/workspace/resume", _workspace_resume)
@@ -555,3 +602,4 @@ def register(app: "Any", adapter: "Any") -> None:
     app.router.add_post("/v1/tools/workspace/exec/stop", _workspace_exec_stop)
     app.router.add_get("/v1/tools/workspace/git", _workspace_git)
     app.router.add_post("/v1/tools/workspace/git/push", _workspace_git_push)
+    app.router.add_post("/v1/tools/workspace/git/init", _workspace_git_init)

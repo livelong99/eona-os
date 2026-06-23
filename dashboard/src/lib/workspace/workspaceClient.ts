@@ -269,6 +269,8 @@ export interface GitCommit {
 }
 export interface GitStatus {
   is_repo: boolean;
+  /** True when the folder is NOT its own repo but sits inside a parent repo. */
+  in_parent_repo?: boolean;
   branch?: string;
   remote?: string | null;
   dirty?: number;
@@ -288,9 +290,8 @@ export async function fetchGitStatus(slug: string, signal?: AbortSignal): Promis
   return (res.json()) as Promise<GitStatus>;
 }
 
-/** Push the workspace's current branch (user-initiated). */
-export async function pushWorkspace(slug: string): Promise<{ ok: boolean; output: string }> {
-  const res = await fetch(`${API_BASE}/v1/tools/${WORKSPACE_TOOL_ID}/git/push`, {
+async function gitAction(slug: string, action: "push" | "init"): Promise<{ ok: boolean; output: string }> {
+  const res = await fetch(`${API_BASE}/v1/tools/${WORKSPACE_TOOL_ID}/git/${action}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ slug }),
@@ -303,6 +304,12 @@ export async function pushWorkspace(slug: string): Promise<{ ok: boolean; output
   }
   return { ok: Boolean(data.ok), output: data.output || data.detail || `${res.status}` };
 }
+
+/** Push the workspace's current branch (user-initiated). */
+export const pushWorkspace = (slug: string) => gitAction(slug, "push");
+
+/** Initialize a git repo for the workspace folder + an initial commit. */
+export const initWorkspaceGit = (slug: string) => gitAction(slug, "init");
 
 // ── Rename (display name only; folder/slug unchanged) ────────────────────────
 

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { GitBranch, ArrowUp, ArrowDown, FileDiff, Loader, UploadCloud, RefreshCw, Check, X } from "lucide-react";
-import { fetchGitStatus, pushWorkspace, type GitStatus } from "@/lib/workspace/workspaceClient";
+import { GitBranch, ArrowUp, ArrowDown, FileDiff, Loader, UploadCloud, RefreshCw, Check, X, FolderGit2 } from "lucide-react";
+import { fetchGitStatus, pushWorkspace, initWorkspaceGit, type GitStatus } from "@/lib/workspace/workspaceClient";
 
 interface Props {
   slug: string;
@@ -17,6 +17,8 @@ export function GitModal({ slug, name, onClose }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [pushing, setPushing] = useState(false);
   const [pushResult, setPushResult] = useState<{ ok: boolean; output: string } | null>(null);
+  const [initing, setIniting] = useState(false);
+  const [initError, setInitError] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setLoading(true);
@@ -39,6 +41,19 @@ export function GitModal({ slug, name, onClose }: Props) {
       if (r.ok) load();
     } finally {
       setPushing(false);
+    }
+  };
+
+  const initRepo = async () => {
+    if (initing) return;
+    setIniting(true);
+    setInitError(null);
+    try {
+      const r = await initWorkspaceGit(slug);
+      if (r.ok) load();
+      else setInitError(r.output);
+    } finally {
+      setIniting(false);
     }
   };
 
@@ -95,7 +110,20 @@ export function GitModal({ slug, name, onClose }: Props) {
           ) : error ? (
             <p className="py-8 text-center text-[12.5px] text-[#f87171]">{error}</p>
           ) : !status?.is_repo ? (
-            <p className="py-8 text-center text-[12.5px] text-white/45">This workspace isn't a git repository.</p>
+            <div className="flex flex-col items-center justify-center gap-3 py-8 text-center">
+              <FolderGit2 className="h-8 w-8 text-white/30" />
+              <p className="max-w-sm text-[12.5px] leading-relaxed text-white/55">
+                {status?.in_parent_repo
+                  ? "This folder isn't its own git repo (it sits inside a parent repository). Initialize a repo scoped to just this workspace."
+                  : "This workspace isn't a git repository yet."}
+              </p>
+              {initError && <p className="text-[11.5px] text-[#f87171]">{initError}</p>}
+              <button type="button" onClick={initRepo} disabled={initing}
+                className="flex items-center gap-2 rounded-lg bg-[#5227FF] px-4 py-2 text-[13px] font-semibold text-white transition-colors hover:bg-[#6438ff] disabled:opacity-50 cursor-pointer">
+                {initing ? <Loader className="h-4 w-4 animate-spin" /> : <GitBranch className="h-4 w-4" />}
+                {initing ? "Initializing…" : "Initialize git"}
+              </button>
+            </div>
           ) : (
             <div className="space-y-1.5">
               <p className="mb-1 text-[10.5px] font-medium uppercase tracking-wide text-white/30">Recent commits</p>
