@@ -93,7 +93,11 @@ export function useRunLanes(
       }
       return lane;
     },
-    [mainLane, roles],
+    // Depend on mainLane's PRIMITIVE fields, not the object — callers pass a fresh
+    // {id,label,role} literal each render, and depending on the object would make
+    // ensureLane (and applyEvent + the stream effect) churn every render, causing
+    // an infinite re-subscribe/refetch loop.
+    [mainLane.id, mainLane.label, mainLane.role, roles],
   );
 
   // Stable lane key for a specialist: the role (so spawn + transcript merge),
