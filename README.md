@@ -49,21 +49,22 @@ Everything runs in Docker on `127.0.0.1`. Your notes, your code, and your conver
 
 ## 📸 Screenshots
 
-> **Maintainer TODO — highest-impact task before launch.** Capture the dashboard and drop the
-> images into [`docs/screenshots/`](docs/screenshots/), then uncomment the block below. A short
-> animated **GIF of a live Workspace run** is the single most effective thing you can add to earn
-> stars. See [`docs/screenshots/README.md`](docs/screenshots/README.md) for the shot list.
-
-<!-- Uncomment once captures exist in docs/screenshots/
 <div align="center">
-<img src="docs/screenshots/home.png" alt="Home — Aurora Orb" width="80%" />
-<br/><em>Home — talk to the agent</em>
+  <img src="resources/screenshots/Home-GIF.gif" alt="Eona OS — live" width="90%" />
+  <br/><sub><em>Home — talk to your agents, always on</em></sub>
 </div>
 
-| Workspace | Memory graph | Brainstorm |
-|:--:|:--:|:--:|
-| ![Workspace](docs/screenshots/workspace.png) | ![Memory](docs/screenshots/memory.png) | ![Brainstorm](docs/screenshots/brainstorm.png) |
--->
+<br/>
+
+| Workspace | Brainstorm |
+|:--:|:--:|
+| ![Workspace — live run lanes & git panel](resources/screenshots/Workspace.png) | ![Brainstorm — ideation swarms](resources/screenshots/Brainstorming.png) |
+| **Memory** | **Labs** |
+| ![Memory — 3D knowledge globe](resources/screenshots/Memory.png) | ![Labs — tool & agent builder](resources/screenshots/Labs.png) |
+| **Planner** | **Integrations** |
+| ![Planner — sprint roadmap](resources/screenshots/Planner.png) | ![Integrations — providers & auth](resources/screenshots/Integrations.png) |
+| **Settings** | **Home** |
+| ![Settings — system control](resources/screenshots/Settings.png) | ![Home — the Eona mark](resources/screenshots/Home.png) |
 
 ---
 
