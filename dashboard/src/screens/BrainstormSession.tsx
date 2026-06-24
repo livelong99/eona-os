@@ -163,11 +163,22 @@ export function BrainstormSession() {
               </div>
             </header>
 
-            <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-3">
-              <p className="text-[11px] font-medium uppercase tracking-wide text-white/35">
-                Idea brief
-              </p>
-              <p className="mt-1.5 text-[12.5px] leading-relaxed text-white/60">{brief}</p>
+            {/* compact: clamped to a few lines so the agent roster stays visible;
+                full text shows in a hover overlay so it never eats the column. */}
+            <div className="group relative shrink-0">
+              <div className="rounded-xl border border-white/[0.07] bg-white/[0.02] p-3">
+                <p className="text-[11px] font-medium uppercase tracking-wide text-white/35">
+                  Idea brief
+                </p>
+                <p className="mt-1.5 line-clamp-4 text-[12.5px] leading-relaxed text-white/60">{brief}</p>
+              </div>
+              <div className="invisible absolute left-0 right-0 top-0 z-30 rounded-xl border border-white/15 p-3 opacity-0 shadow-[0_24px_70px_rgba(0,0,0,0.6)] transition-opacity duration-150 group-hover:visible group-hover:opacity-100"
+                style={{ background: "rgba(16,17,26,0.98)", backdropFilter: "blur(12px)" }}>
+                <p className="text-[11px] font-medium uppercase tracking-wide text-white/35">
+                  Idea brief
+                </p>
+                <p className="mt-1.5 max-h-[60vh] overflow-y-auto whitespace-pre-wrap text-[12.5px] leading-relaxed text-white/70">{brief}</p>
+              </div>
             </div>
 
             <div className="min-h-0 flex-1">
