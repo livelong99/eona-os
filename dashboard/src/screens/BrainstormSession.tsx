@@ -7,6 +7,7 @@ import {
   Gauge,
   Rocket,
   Loader,
+  Send,
 } from "lucide-react";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { AgentHome } from "@/components/brainstorm/AgentHome";
@@ -79,10 +80,8 @@ export function BrainstormSession() {
     };
   }, [slug, navState?.runId]);
 
-  const { lanes, qna, readiness, prd, phase, streaming, submitAnswers } = useBrainstormRun(
-    resolved.runId,
-    { streamLive: resolved.live },
-  );
+  const { lanes, qna, readiness, prd, phase, streaming, submitAnswers, reviseDraft } =
+    useBrainstormRun(resolved.runId, { streamLive: resolved.live });
 
   const title = qna?.project || navState?.title || slug || "New idea";
   const brief = qna?.brief || navState?.brief || "A fresh idea, just handed to the swarm.";
@@ -92,6 +91,14 @@ export function BrainstormSession() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [promoting, setPromoting] = useState(false);
   const [selectedAgent, setSelectedAgent] = useState<string>(ALL_AGENTS);
+  const [prdNote, setPrdNote] = useState("");
+
+  const sendPrdNote = async () => {
+    const text = prdNote.trim();
+    if (!text || streaming) return;
+    setPrdNote("");
+    await reviseDraft(text);
+  };
 
   // When the PRD lands, surface it.
   useEffect(() => {
@@ -264,10 +271,44 @@ export function BrainstormSession() {
               ) : view === "readiness" ? (
                 <ReadinessCard readiness={readiness} />
               ) : (
-                <RequirementView
-                  markdown={prd ?? "_The PRD is drafted once the product is dev-ready._"}
-                  generating={!prd && streaming}
-                />
+                <div className="flex h-full min-h-0 flex-col">
+                  <div className="min-h-0 flex-1 overflow-hidden">
+                    <RequirementView
+                      markdown={prd ?? "_The PRD is drafted once the product is dev-ready._"}
+                      generating={!prd && streaming}
+                    />
+                  </div>
+                  {/* Chat to request PRD changes once it's drafted. */}
+                  {prd && (
+                    <div className="shrink-0 border-t border-white/10 p-2.5">
+                      <div className="flex items-end gap-2">
+                        <textarea
+                          value={prdNote}
+                          onChange={(e) => setPrdNote(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" && !e.shiftKey) {
+                              e.preventDefault();
+                              void sendPrdNote();
+                            }
+                          }}
+                          rows={1}
+                          placeholder="Suggest a change to the PRD…"
+                          disabled={streaming}
+                          className="max-h-28 min-h-[38px] flex-1 resize-none rounded-lg border border-white/12 bg-white/[0.04] px-3 py-2 text-[13px] text-white outline-none placeholder:text-white/35 focus:border-white/25 disabled:opacity-60"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void sendPrdNote()}
+                          disabled={streaming || !prdNote.trim()}
+                          title="Send to the swarm"
+                          className="grid h-[38px] w-[38px] shrink-0 place-items-center rounded-lg bg-[#5227FF] text-white transition-colors hover:bg-[#6438ff] disabled:opacity-40 cursor-pointer"
+                        >
+                          {streaming ? <Loader className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>

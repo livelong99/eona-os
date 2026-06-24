@@ -107,6 +107,25 @@ export async function sendAnswers(
   await sendRunMessage(runId, text, opts);
 }
 
+/**
+ * Send free-form feedback on the drafted PRD. The Sage PM revises prd.md per the
+ * user's request (and updates readiness.json / qna.json if scope shifts), then
+ * keeps the run at "prd-ready". Used by the PRD chat once the PRD is generated.
+ */
+export async function sendPrdFeedback(
+  runId: string,
+  feedback: string,
+  opts: AnswerStreamOptions,
+): Promise<void> {
+  const text =
+    "The user reviewed the drafted PRD and is requesting changes. Apply this " +
+    "feedback: revise prd.md accordingly (re-run any specialist whose area the " +
+    "change touches, and update readiness.json / qna.json if scope shifts), then " +
+    "keep phase \"prd-ready\" and summarize what you changed.\n\nFEEDBACK: " +
+    feedback.trim();
+  await sendRunMessage(runId, text, opts);
+}
+
 // ── Artifact fetch (qna.json / readiness.json / prd.md) ──────────────────────
 // The cache-busted artifact-raw read + transcript replay live in runsClient
 // (shared with the workspace tool); these are thin per-tool wrappers.

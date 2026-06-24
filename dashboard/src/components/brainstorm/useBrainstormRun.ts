@@ -10,6 +10,7 @@
 import { useCallback, useRef, useState } from "react";
 import {
   sendAnswers,
+  sendPrdFeedback,
   fetchQna,
   fetchReadiness,
   fetchPrd,
@@ -50,6 +51,8 @@ interface UseBrainstormRunResult {
   error: string | null;
   /** Submit answers for the open questions; streams the PM's reply into lanes. */
   submitAnswers: (answers: Record<string, string>) => Promise<void>;
+  /** Send free-form feedback on the drafted PRD; the PM revises prd.md. */
+  reviseDraft: (feedback: string) => Promise<void>;
   /** Re-pull the artifacts (qna/readiness/prd) on demand. */
   refetch: () => Promise<void>;
 }
@@ -116,5 +119,22 @@ export function useBrainstormRun(
     [runId, applyEvent, refetch, setError, setStreaming],
   );
 
-  return { lanes, qna, readiness, prd, phase, streaming, error, submitAnswers, refetch };
+  const reviseDraft = useCallback(
+    async (feedback: string) => {
+      if (!runId || !feedback.trim()) return;
+      setError(null);
+      setStreaming(true);
+      try {
+        await sendPrdFeedback(runId, feedback, { onEvent: applyEvent });
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "failed to send feedback");
+      } finally {
+        setStreaming(false);
+        await refetch();
+      }
+    },
+    [runId, applyEvent, refetch, setError, setStreaming],
+  );
+
+  return { lanes, qna, readiness, prd, phase, streaming, error, submitAnswers, reviseDraft, refetch };
 }
