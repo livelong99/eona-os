@@ -109,12 +109,15 @@ platforms:
 # backend (no paid provider, no API key) — good default for the container.
 tts:
   enabled: true
-  provider: piper
+  provider: edge
+  edge:
+    # Microsoft Edge neural voice (free, no API key; needs internet). Emma is a
+    # warm multilingual en-US voice. Other options: en-US-AriaNeural,
+    # en-US-AvaMultilingualNeural, en-US-AndrewMultilingualNeural.
+    voice: en-US-EmmaMultilingualNeural
   piper:
-    # Stock en_US-lessac-high (clean, reliable) — good for validating the TTS
-    # path. Swap to /opt/data/voices/en_US-miles-medium.onnx for the custom Miles
-    # voice. Voices live in ~/.hermes/voices/ → /opt/data in-container; the
-    # .onnx.json must sit beside the .onnx (same basename).
+    # Local/offline fallback (used only when provider: piper). Voices live in
+    # ~/.hermes/voices/ → /opt/data in-container; the .onnx.json sits beside the .onnx.
     voice: /opt/data/voices/en_US-lessac-high.onnx
 
 # --- MCP servers: shared memory + tools (verify shape vs `hermes` MCP docs) ----
