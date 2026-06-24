@@ -47,7 +47,10 @@ anthropic = AnthropicProfile(
     env_vars=("ANTHROPIC_API_KEY", "ANTHROPIC_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"),
     base_url="https://api.anthropic.com",
     auth_type="api_key",
-    default_aux_model="claude-haiku-4-5-20251001",
+    # Bumped Haiku -> Sonnet per user request: background/aux tasks (memory,
+    # summaries, titles, planner triage) run on Sonnet for higher quality.
+    # Trade-off: more cost + latency on those side calls.
+    default_aux_model="claude-sonnet-4-6",
 )
 
 register_provider(anthropic)

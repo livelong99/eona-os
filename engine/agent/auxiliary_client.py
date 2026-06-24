@@ -308,7 +308,10 @@ _API_KEY_PROVIDER_AUX_MODELS_FALLBACK: Dict[str, str] = {
     "stepfun": "step-3.5-flash",
     "kimi-coding-cn": "kimi-k2-turbo-preview",
     "gmi": "google/gemini-3.1-flash-lite-preview",
-    "anthropic": "claude-haiku-4-5-20251001",
+    # Bumped Haiku -> Sonnet per user request: auxiliary/background tasks (memory,
+    # summaries, titles, triage) run on Sonnet for higher quality. Higher cost +
+    # latency on those background calls. Set `auxiliary.model` in config to override.
+    "anthropic": "claude-sonnet-4-6",
     "opencode-zen": "gemini-3-flash",
     "opencode-go": "glm-5",
     "kilocode": "google/gemini-3-flash-preview",
