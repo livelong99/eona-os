@@ -76,6 +76,11 @@ services:
       # readiness.json, prd.md, steering CLAUDE.md, ruflo state) are written here
       # so they live in the real vault and survive restarts. Matches HERMES_BRAINSTORM_ROOT.
       - "${VAULT_DIR:-${HOME}/Documents/Obsidian/Vault}/30_Resources/Brainstorms:/vault/30_Resources/Brainstorms:rw"
+      # Same pattern for the Flow Cinematography Director: its session folders
+      # (knowledge-base.md, look-bible.md, shot-list.md, flow-prompts.md/.txt,
+      # review.json, uploaded review media under assets/) are written here so they
+      # land in the real vault. Matches the flow-director tool's artifacts_root.
+      - "${VAULT_DIR:-${HOME}/Documents/Obsidian/Vault}/30_Resources/Flow:/vault/30_Resources/Flow:rw"
       # Workspaces: the SDLC pipeline clones/copies projects here and the agent team
       # builds + tests against them, so 10_Projects must be read-WRITE in-container.
       # Matches HERMES_WORKSPACES_ROOT. (agent-home itself lives here — the whole
