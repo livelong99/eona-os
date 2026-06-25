@@ -21,7 +21,7 @@ import {
 
 interface NavState { name?: string; runId?: string; manifest?: ToolManifest }
 
-const HIDDEN_ARTIFACTS = new Set(["qna.json", "workspace.json", ".swarm-provisioned"]);
+const HIDDEN_ARTIFACTS = new Set(["qna.json", "workspace.json", ".swarm-provisioned", "CLAUDE.md", ".mcp.json"]);
 
 export function SwarmToolRun() {
   const { toolId = "", projectId = "" } = useParams();
@@ -245,7 +245,7 @@ function OutputView({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap gap-1.5 border-b border-white/[0.07] p-2.5">
+      <div className="flex max-h-24 shrink-0 flex-wrap gap-1.5 overflow-y-auto border-b border-white/[0.07] p-2.5">
         {files.map((f) => (
           <button key={f.relpath} type="button" onClick={() => setSelected(f.relpath)}
             className={`flex items-center gap-1.5 rounded-md px-2 py-1 font-mono text-[11px] transition-colors cursor-pointer ${

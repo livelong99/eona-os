@@ -43,7 +43,6 @@ const STAGES = [
 ];
 
 const DOC_FILES = ["knowledge-base.md", "intake.md", "research.md", "look-bible.md", "shot-list.md"];
-const HIDDEN = new Set(["qna.json", "workspace.json", ".swarm-provisioned"]);
 
 export function FlowDirectorRun() {
   const { toolId = "flow-director", projectId = "" } = useParams();
@@ -267,8 +266,9 @@ function DocsView({
   fetchText: (rel: string) => Promise<string | null>;
   rawUrl: (rel: string) => string;
 }) {
-  const docs = files.filter((f) => !HIDDEN.has(f.relpath) && (DOC_FILES.includes(f.relpath) || f.name.endsWith(".md") || f.name.endsWith(".html")))
-    .filter((f) => f.relpath !== "flow-prompts.md" && f.relpath !== "review.md");
+  // Only the tool's own stage docs — never the swarm scaffolding or the prompts/
+  // review artifacts (those have their own tabs).
+  const docs = files.filter((f) => DOC_FILES.includes(f.relpath));
   const [selected, setSelected] = useState<string | null>(null);
   const [text, setText] = useState<string | null>(null);
 
@@ -294,7 +294,7 @@ function DocsView({
   }
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex flex-wrap gap-1.5 border-b border-white/[0.07] p-2.5">
+      <div className="flex max-h-24 shrink-0 flex-wrap gap-1.5 overflow-y-auto border-b border-white/[0.07] p-2.5">
         {docs.map((f) => (
           <button key={f.relpath} type="button" onClick={() => setSelected(f.relpath)}
             className={`flex items-center gap-1.5 rounded-md px-2 py-1 font-mono text-[11px] transition-colors cursor-pointer ${

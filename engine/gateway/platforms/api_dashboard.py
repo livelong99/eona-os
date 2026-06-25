@@ -1684,13 +1684,20 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
             for p in artifacts_dir.rglob("*"):
                 if not p.is_file():
                     continue
+                rel = p.relative_to(artifacts_dir)
+                # Skip swarm runtime scaffolding: ruflo init writes hundreds of
+                # files under .claude/ and .claude-flow/ (agents, commands, helpers)
+                # plus dotfiles (.mcp.json, .swarm-provisioned). Exclude any path
+                # with a hidden component so only real tool artifacts are listed.
+                if any(part.startswith(".") for part in rel.parts):
+                    continue
                 try:
                     st = p.stat()
                 except OSError:
                     continue
                 out.append({
                     "name": p.name,
-                    "relpath": p.relative_to(artifacts_dir).as_posix(),
+                    "relpath": rel.as_posix(),
                     "kind": _artifact_kind(p.name),
                     "size": st.st_size,
                     "mtime": st.st_mtime,
@@ -1935,13 +1942,20 @@ def register_dashboard_routes(app: "Any", adapter: "Any") -> None:
             for p in artifacts_dir.rglob("*"):
                 if not p.is_file():
                     continue
+                rel = p.relative_to(artifacts_dir)
+                # Skip swarm runtime scaffolding: ruflo init writes hundreds of
+                # files under .claude/ and .claude-flow/ (agents, commands, helpers)
+                # plus dotfiles (.mcp.json, .swarm-provisioned). Exclude any path
+                # with a hidden component so only real tool artifacts are listed.
+                if any(part.startswith(".") for part in rel.parts):
+                    continue
                 try:
                     st = p.stat()
                 except OSError:
                     continue
                 out.append({
                     "name": p.name,
-                    "relpath": p.relative_to(artifacts_dir).as_posix(),
+                    "relpath": rel.as_posix(),
                     "kind": _artifact_kind(p.name),
                     "size": st.st_size,
                     "mtime": st.st_mtime,

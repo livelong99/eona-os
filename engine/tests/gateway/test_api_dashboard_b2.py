@@ -753,3 +753,34 @@ async def test_workspace_git_parent_scoping_and_init(tmp_path, monkeypatch):
         s2 = await (await client.get("/v1/tools/workspace/git?slug=deck")).json()
         assert s2["is_repo"] is True
         assert any(c["subject"] == "Initial commit" for c in s2["commits"])
+
+
+@pytest.mark.asyncio
+async def test_tool_artifacts_excludes_swarm_scaffolding(tmp_path, monkeypatch):
+    """The artifacts listing skips ruflo init's .claude/ + .claude-flow/ scaffolding
+    and dotfiles, returning only the tool's real outputs."""
+    from gateway.platforms import api_dashboard as d
+
+    adir = tmp_path / "proj"
+    (adir / ".claude" / "agents" / "swarm").mkdir(parents=True)
+    (adir / ".claude-flow").mkdir(parents=True)
+    (adir / "look-bible.md").write_text("x", encoding="utf-8")
+    (adir / "CLAUDE.md").write_text("steer", encoding="utf-8")
+    (adir / ".mcp.json").write_text("{}", encoding="utf-8")
+    (adir / ".swarm-provisioned").write_text("", encoding="utf-8")
+    (adir / ".claude" / "agents" / "swarm" / "mesh-coordinator.md").write_text("a", encoding="utf-8")
+    (adir / ".claude-flow" / "CAPABILITIES.md").write_text("c", encoding="utf-8")
+
+    run_id = "run_artifacts_test"
+    d._run_registry()[run_id] = {"tool_id": "flow-director", "brand": "proj"}
+    monkeypatch.setattr(d, "_artifacts_dir_for", lambda tool_id, record: adir)
+
+    adapter = _make_adapter()
+    app = _create_dashboard_app(adapter)
+    async with TestClient(TestServer(app)) as client:
+        r = await client.get("/v1/tools/flow-director/artifacts?run=run_artifacts_test")
+        assert r.status == 200
+        names = {f["relpath"] for f in (await r.json())["files"]}
+    # Real outputs kept (CLAUDE.md listed by engine; frontend hides it). All
+    # dot-prefixed dirs/files excluded.
+    assert names == {"look-bible.md", "CLAUDE.md"}

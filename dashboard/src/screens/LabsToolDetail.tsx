@@ -174,7 +174,7 @@ export function LabsToolDetail({ toolId }: { toolId?: string } = {}) {
 
   return (
     <section className="absolute inset-0 z-10 flex justify-center px-[3vw] pb-5 pt-20">
-      <GlassPanel className="w-full max-w-[1080px]">
+      <GlassPanel className="w-full max-w-[1600px]">
         {/* Header */}
         <header className="flex items-center gap-4 px-6 py-5 sm:px-8">
           <button
@@ -317,7 +317,7 @@ export function LabsToolDetail({ toolId }: { toolId?: string } = {}) {
 function CenteredPanel({ children }: { children: React.ReactNode }) {
   return (
     <section className="absolute inset-0 z-10 flex justify-center px-[3vw] pb-5 pt-20">
-      <GlassPanel className="w-full max-w-[1080px]">
+      <GlassPanel className="w-full max-w-[1600px]">
         <div className="flex h-full flex-col items-center justify-center text-center">{children}</div>
       </GlassPanel>
     </section>

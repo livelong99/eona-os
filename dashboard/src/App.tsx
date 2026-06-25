@@ -67,11 +67,21 @@ function App() {
   // The active dock icon: prefix-match non-home routes (so /workspace/:id keeps
   // Finder lit), otherwise fall back to the home (Claude) icon.
   const selected = (() => {
-    const sub = baseIcons.findIndex(
-      (i) => i.route !== "/" && location.pathname.startsWith(i.route),
-    );
+    const path = location.pathname;
+    const idxOf = (route: string) => baseIcons.findIndex((i) => i.route === route);
+    // Brand Maker / Flow Director run screens live under /labs/… but belong to
+    // their own dock icon — keep it lit through launch + run.
+    if (path.includes("/flow-director") || path.startsWith("/labs/flow/")) {
+      const i = idxOf("/flow-director");
+      if (i >= 0) return i;
+    }
+    if (path.includes("/brand-maker")) {
+      const i = idxOf("/brand-maker");
+      if (i >= 0) return i;
+    }
+    const sub = baseIcons.findIndex((i) => i.route !== "/" && path.startsWith(i.route));
     if (sub >= 0) return sub;
-    return Math.max(0, baseIcons.findIndex((i) => i.route === "/"));
+    return Math.max(0, idxOf("/"));
   })();
 
   const dockIcons: DockIcon[] = baseIcons.map((icon, i) => ({
