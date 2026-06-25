@@ -4,10 +4,10 @@
 // cards), Review (upload renders → vision critic verdicts), and Q&A. Built on the
 // shared useAgentRun hook (lanes, qna, artifacts, directive, /message).
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import {
-  ArrowLeft, Send, Loader, FileText, MessageCircleQuestion, Clapperboard, Film, Check,
+  ArrowLeft, Send, Loader, FileText, MessageCircleQuestion, Clapperboard, Film, Check, Zap,
 } from "lucide-react";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { Markdown } from "@/components/ui/markdown";
@@ -107,11 +107,26 @@ export function FlowDirectorRun() {
 
   const have = useMemo(() => new Set(outFiles.map((f) => f.relpath)), [outFiles]);
   const mtimeOf = (rel: string) => outFiles.find((f) => f.relpath === rel)?.mtime;
-  const activeStage = Math.min(STAGES.filter((s) => have.has(s.artifact)).length, STAGES.length - 1);
+  const completedStages = STAGES.filter((s) => have.has(s.artifact)).length;
+  const activeStage = Math.min(completedStages, STAGES.length - 1);
 
   const openQuestions = (qna?.questions ?? []).filter((q) => !q.answered);
   const hasQna = openQuestions.length > 0;
   useEffect(() => { if (hasQna) setView("qna"); }, [hasQna]);
+
+  // Auto mode: progress stages 0→5 without manual approval, pausing only for QnA
+  // gates and stopping once prompts are generated (the review step needs the
+  // user's Flow renders). The step-gate stays intact — we just auto-send Continue.
+  const [auto, setAuto] = useState(false);
+  const autoRef = useRef<number>(-1);
+  useEffect(() => {
+    if (!auto || streaming || hasQna || reviewOnly || !runId) return;
+    // Knowledge base done (>=1), not yet past prompts (<=5). Advance once per stage.
+    if (completedStages < 1 || completedStages > 5) return;
+    if (autoRef.current === completedStages) return;
+    autoRef.current = completedStages;
+    void directive("Approved. Continue to the next stage.");
+  }, [auto, streaming, hasQna, reviewOnly, runId, completedStages, directive]);
   // Surface prompts/review tabs as the run reaches them.
   useEffect(() => {
     if (have.has("review.json")) setView((v) => (v === "docs" ? "review" : v));
@@ -167,7 +182,14 @@ export function FlowDirectorRun() {
               );
             })}
           </div>
-          {streaming && <span className="inline-flex items-center gap-1.5 text-[11px] text-white/45"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#34d399]" /> live</span>}
+          {/* Auto mode toggle — auto-advances stages 0→5, pausing on QnA + stopping at prompts. */}
+          <button type="button" onClick={() => { autoRef.current = -1; setAuto((v) => !v); }}
+            title={auto ? "Auto mode on — advancing stages automatically (pauses for Q&A, stops at prompts)" : "Auto mode off — approve each stage"}
+            className={`ml-auto flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[12px] font-medium transition-colors cursor-pointer lg:ml-0 ${
+              auto ? "border-[#5227FF]/50 bg-[#5227FF]/15 text-white" : "border-white/10 text-white/55 hover:bg-white/[0.06]"}`}>
+            <Zap className={`h-3.5 w-3.5 ${auto ? "text-[#a78bfa]" : ""}`} /> Auto
+          </button>
+          {streaming && <span className="inline-flex shrink-0 items-center gap-1.5 text-[11px] text-white/45"><span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[#34d399]" /> live</span>}
         </div>
 
         <div className="flex min-h-0 flex-1 gap-3 xl:gap-4">
@@ -236,7 +258,7 @@ export function FlowDirectorRun() {
             )}
 
             <div className="flex items-end gap-2 px-4 py-3">
-              {!reviewOnly && !hasQna && view !== "review" && (
+              {!auto && !reviewOnly && !hasQna && view !== "review" && (
                 <button type="button" onClick={approve} disabled={streaming} title="Approve this stage and continue"
                   className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/15 px-3 py-2 text-[12px] font-semibold text-white/80 transition-colors hover:bg-white/10 disabled:opacity-40 cursor-pointer">
                   <Check className="h-3.5 w-3.5" /> Continue
