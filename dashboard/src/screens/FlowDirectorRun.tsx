@@ -33,16 +33,16 @@ const FLOW_ROLES: LaneRole[] = [
 ];
 
 const STAGES = [
-  { id: "stage0", title: "Knowledge Base", artifact: "knowledge-base.md" },
-  { id: "stage1", title: "Intake", artifact: "intake.md" },
+  { id: "stage0", title: "Knowledge", artifact: "knowledge-base.md" },
+  { id: "stage1", title: "Reference", artifact: "reference-brief.md" },
   { id: "stage2", title: "Research", artifact: "research.md" },
-  { id: "stage3", title: "Look Bible", artifact: "look-bible.md" },
-  { id: "stage4", title: "Shot List", artifact: "shot-list.md" },
+  { id: "stage3", title: "Direction", artifact: "direction.md" },
+  { id: "stage4", title: "Structure", artifact: "structure.md" },
   { id: "stage5", title: "Prompts", artifact: "flow-prompts.md" },
   { id: "stage6", title: "Review", artifact: "review.json" },
 ];
 
-const DOC_FILES = ["knowledge-base.md", "intake.md", "research.md", "look-bible.md", "shot-list.md"];
+const DOC_FILES = ["knowledge-base.md", "reference-brief.md", "intake.md", "research.md", "direction.md", "structure.md"];
 
 export function FlowDirectorRun() {
   const { toolId = "flow-director", projectId = "" } = useParams();

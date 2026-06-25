@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Upload, Loader, Check, X, Copy, Film, Eye } from "lucide-react";
 import { uploadBrandAssets } from "@/lib/labs/toolsClient";
-import { parsePrompts, type ParsedShot } from "@/components/labs/FlowPrompts";
+import { parseBlocks, type PromptBlock } from "@/components/labs/FlowPrompts";
 
 interface ReviewShot {
   n: number;
@@ -32,7 +32,7 @@ function CopyInline({ text }: { text: string }) {
 function UploadSlot({
   shot, uploaded, busy, onPick,
 }: {
-  shot: ParsedShot;
+  shot: PromptBlock;
   uploaded?: string;
   busy?: boolean;
   onPick: (file: File) => void;
@@ -96,14 +96,14 @@ export function ReviewPanel({
   reviewMtime?: number;
   onReview: () => Promise<void>;
 }) {
-  const [shots, setShots] = useState<ParsedShot[]>([]);
+  const [shots, setShots] = useState<PromptBlock[]>([]);
   const [uploaded, setUploaded] = useState<Record<number, string>>({});
   const [uploading, setUploading] = useState<Record<number, boolean>>({});
   const [review, setReview] = useState<ReviewShot[] | null>(null);
 
   useEffect(() => {
     let live = true;
-    fetchText("flow-prompts.md").then((t) => { if (live && t) setShots(parsePrompts(t).shots); });
+    fetchText("flow-prompts.md").then((t) => { if (live && t) setShots(parseBlocks(t).blocks); });
     return () => { live = false; };
   }, [fetchText, promptsMtime]);
 
@@ -119,7 +119,7 @@ export function ReviewPanel({
     return () => { live = false; };
   }, [fetchText, reviewMtime]);
 
-  const pick = async (shot: ParsedShot, file: File) => {
+  const pick = async (shot: PromptBlock, file: File) => {
     if (!runId) return;
     const ext = (file.name.split(".").pop() || "bin").toLowerCase();
     const named = new File([file], `shot-${shot.n}.${ext}`, { type: file.type });
