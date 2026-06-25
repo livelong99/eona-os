@@ -2,6 +2,13 @@ import { Play, Workflow, Zap } from "lucide-react";
 import { type Tool, TOOL_STATUS_META } from "@/lib/labs";
 import { TOOL_ICONS } from "@/components/labs/toolIcon";
 
+// Tools with a custom app icon (served from public/icons/light). Rendered as an
+// image tile instead of the tinted lucide glyph.
+const TOOL_IMAGE: Record<string, string> = {
+  "brand-maker": "/icons/light/brand-maker.jpeg",
+  "flow-director": "/icons/light/flow-director.jpeg",
+};
+
 interface ToolCardProps {
   tool: Tool;
   onOpen: (id: string) => void;
@@ -35,12 +42,16 @@ export function ToolCard({ tool, onOpen }: ToolCardProps) {
       />
 
       <div className="relative flex items-start gap-3">
-        <span
-          className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-white/10"
-          style={{ background: `${tool.accent}22` }}
-        >
-          <Icon className="h-5 w-5" style={{ color: tool.accent }} />
-        </span>
+        {TOOL_IMAGE[tool.id] ? (
+          <img src={TOOL_IMAGE[tool.id]} alt="" className="h-11 w-11 shrink-0 rounded-xl object-cover" />
+        ) : (
+          <span
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-white/10"
+            style={{ background: `${tool.accent}22` }}
+          >
+            <Icon className="h-5 w-5" style={{ color: tool.accent }} />
+          </span>
+        )}
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h3 className="truncate text-[15px] font-semibold tracking-tight text-white">

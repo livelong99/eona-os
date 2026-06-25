@@ -19,7 +19,10 @@ const WorkspaceDetail = lazy(() => named(import("@/screens/WorkspaceDetail"), "W
 const BrainstormScreen = lazy(() => named(import("@/screens/BrainstormScreen"), "BrainstormScreen"));
 const BrainstormSession = lazy(() => named(import("@/screens/BrainstormSession"), "BrainstormSession"));
 const LabsScreen = lazy(() => named(import("@/screens/LabsScreen"), "LabsScreen"));
-const LabsToolDetail = lazy(() => named(import("@/screens/LabsToolDetail"), "LabsToolDetail"));
+// Typed lazy import (not via `named`) so the optional `toolId` prop survives —
+// the dedicated /brand-maker and /flow-director routes pass it.
+const LabsToolDetail = lazy(() =>
+  import("@/screens/LabsToolDetail").then((m) => ({ default: m.LabsToolDetail })));
 const BrandMakerRun = lazy(() => named(import("@/screens/BrandMakerRun"), "BrandMakerRun"));
 const SwarmToolRun = lazy(() => named(import("@/components/toolkit/SwarmToolRun"), "SwarmToolRun"));
 const FlowDirectorRun = lazy(() => named(import("@/screens/FlowDirectorRun"), "FlowDirectorRun"));
@@ -36,6 +39,8 @@ const baseIcons: (Omit<DockIcon, "active" | "onClick"> & { route: string })[] = 
   { src: "/icons/light/workspace.jpeg", alt: "Workspace", route: "/workspace" },
   { src: "/icons/light/brainstorm.jpeg", alt: "Brainstorm", route: "/brainstorm" },
   { src: "/icons/light/labs.jpeg", alt: "Labs", route: "/labs" },
+  { src: "/icons/light/brand-maker.jpeg", alt: "Brand Maker", route: "/brand-maker" },
+  { src: "/icons/light/flow-director.jpeg", alt: "Flow Director", route: "/flow-director" },
   { src: "/icons/light/memory.jpeg", alt: "Memory", route: "/memory" },
   { src: "/icons/light/control.jpeg", alt: "Control", route: "/control" },
   { src: "/icons/light/integrations.jpeg", alt: "Integrations", route: "/integrations" },
@@ -110,6 +115,9 @@ function App() {
         <Route path="/brainstorm/:id" element={<BrainstormSession />} />
         <Route path="/labs" element={<LabsScreen />} />
         <Route path="/labs/:id" element={<LabsToolDetail />} />
+        {/* Dedicated dock entries for the two creative tools. */}
+        <Route path="/brand-maker" element={<LabsToolDetail toolId="brand-maker" />} />
+        <Route path="/flow-director" element={<LabsToolDetail toolId="flow-director" />} />
         <Route path="/labs/run/:toolId/:projectId" element={<SwarmToolRun />} />
         <Route path="/labs/flow/:toolId/:projectId" element={<FlowDirectorRun />} />
         <Route path="/labs/:toolId/:brandId" element={<BrandMakerRun />} />

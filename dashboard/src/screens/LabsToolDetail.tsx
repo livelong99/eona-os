@@ -46,8 +46,11 @@ function kebab(value: string): string {
 
 // LabsToolDetail — loads a tool's full manifest from the engine and renders its
 // workflow + I/O, a dynamic launch form, a live run console, and Delete.
-export function LabsToolDetail() {
-  const { id } = useParams();
+export function LabsToolDetail({ toolId }: { toolId?: string } = {}) {
+  // `toolId` is supplied by the dedicated dock routes (/brand-maker, /flow-director);
+  // otherwise the tool comes from the /labs/:id route param.
+  const { id: paramId } = useParams();
+  const id = toolId ?? paramId;
   const navigate = useNavigate();
   const [load, setLoad] = useState<Load>({ phase: "loading" });
   const [run, setRun] = useState<RunState>({ phase: "idle" });
