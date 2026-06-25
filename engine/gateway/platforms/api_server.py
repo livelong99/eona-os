@@ -88,7 +88,10 @@ def _hermes_version() -> str:
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8642
 MAX_STORED_RESPONSES = 100
-MAX_REQUEST_BYTES = 10_000_000  # 10 MB — accommodates long agent conversations with tool calls
+# Whole-request body cap (aiohttp client_max_size). Covers long agent
+# conversations AND multipart uploads (tool reference images + review media), so
+# it must exceed the per-file upload cap. Env-overridable via HERMES_MAX_REQUEST_MB.
+MAX_REQUEST_BYTES = int(os.environ.get("HERMES_MAX_REQUEST_MB", "200")) * 1024 * 1024
 CHAT_COMPLETIONS_SSE_KEEPALIVE_SECONDS = 30.0
 MAX_NORMALIZED_TEXT_LENGTH = 65_536  # 64 KB cap for normalized content parts
 MAX_CONTENT_LIST_SIZE = 1_000  # Max items when content is an array

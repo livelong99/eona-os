@@ -1283,7 +1283,7 @@ def _start_run(
 # Per-file cap and the field-id charset allowlist. Files land under the
 # writable data root only (``/opt/data/uploads`` == host ``~/.hermes/uploads``);
 # ``/vault`` and ``/opt/skills`` are read-only and are never written here.
-_UPLOAD_MAX_BYTES = 25 * 1024 * 1024  # 25 MB per file
+_UPLOAD_MAX_BYTES = int(os.environ.get("HERMES_UPLOAD_MAX_MB", "100")) * 1024 * 1024  # per file (review video clips)
 _UPLOAD_FIELD_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 # Brand-asset uploads land in the rw /vault Brands mount and may include video,
 # so they get a larger per-file cap than the data-root tool uploads above.
