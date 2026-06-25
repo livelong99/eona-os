@@ -22,6 +22,7 @@ const LabsScreen = lazy(() => named(import("@/screens/LabsScreen"), "LabsScreen"
 const LabsToolDetail = lazy(() => named(import("@/screens/LabsToolDetail"), "LabsToolDetail"));
 const BrandMakerRun = lazy(() => named(import("@/screens/BrandMakerRun"), "BrandMakerRun"));
 const SwarmToolRun = lazy(() => named(import("@/components/toolkit/SwarmToolRun"), "SwarmToolRun"));
+const FlowDirectorRun = lazy(() => named(import("@/screens/FlowDirectorRun"), "FlowDirectorRun"));
 const MemoryScreen = lazy(() => named(import("@/screens/MemoryScreen"), "MemoryScreen"));
 const ControlScreen = lazy(() => named(import("@/screens/ControlScreen"), "ControlScreen"));
 const IntegrationsScreen = lazy(() => named(import("@/screens/IntegrationsScreen"), "IntegrationsScreen"));
@@ -110,6 +111,7 @@ function App() {
         <Route path="/labs" element={<LabsScreen />} />
         <Route path="/labs/:id" element={<LabsToolDetail />} />
         <Route path="/labs/run/:toolId/:projectId" element={<SwarmToolRun />} />
+        <Route path="/labs/flow/:toolId/:projectId" element={<FlowDirectorRun />} />
         <Route path="/labs/:toolId/:brandId" element={<BrandMakerRun />} />
         <Route path="/memory" element={<MemoryScreen />} />
         <Route path="/control" element={<ControlScreen />} />

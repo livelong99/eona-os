@@ -90,7 +90,12 @@ export function LabsToolDetail() {
       // legacy single-agent tools → the step-gated workbench run screen.
       const brand = String(values.brand ?? values.project ?? values.name ?? "");
       const brandId = kebab(brand) || "run";
-      if (manifest.swarm) {
+      if (manifest.id === "flow-director") {
+        // Dedicated cinematography run screen (prompt cards + vision review).
+        navigate(`/labs/flow/${manifest.id}/${brandId}`, {
+          state: { runId: run_id, name: brand, manifest },
+        });
+      } else if (manifest.swarm) {
         navigate(`/labs/run/${manifest.id}/${brandId}`, {
           state: { runId: run_id, name: brand, manifest },
         });

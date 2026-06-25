@@ -99,7 +99,11 @@ export function ProjectsGallery({ toolId, steps, swarm }: ProjectsGalleryProps) 
               toolId={toolId}
               project={project}
               steps={steps}
-              onOpen={() => navigate(swarm ? `/labs/run/${toolId}/${project.id}` : `/labs/${toolId}/${project.id}`)}
+              onOpen={() => navigate(
+                toolId === "flow-director" ? `/labs/flow/${toolId}/${project.id}`
+                  : swarm ? `/labs/run/${toolId}/${project.id}`
+                  : `/labs/${toolId}/${project.id}`,
+              )}
             />
           ))}
         </div>
