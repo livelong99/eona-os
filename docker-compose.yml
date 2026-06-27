@@ -176,7 +176,11 @@ services:
     # (or COMPOSE_PROFILES=cognee); a plain `docker compose up` never starts it.
     # NB: hermes has NO `depends_on: cognee` — the Cognee recall lane + graph
     # endpoint are fail-open, so hermes starts and serves fine when cognee is down.
-    image: cognee/cognee:latest # verify/pin after first pull (same convention as qdrant)
+    # cognee/cognee:latest + the fastembed extra (base image omits it; we use a
+    # local fastembed embedder so embeddings stay local/free — see infra/cognee/).
+    build:
+      context: ./infra/cognee
+    image: agent-home/cognee-fastembed:local
     container_name: agenthome-cognee
     restart: unless-stopped
     profiles: ["cognee"] # OFF by default — only starts when the cognee profile is enabled
