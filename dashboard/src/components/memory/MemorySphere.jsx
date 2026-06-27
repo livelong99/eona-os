@@ -22,6 +22,15 @@ const BG = 0x080a14;
 const RADIUS = 2.5;
 const MAX_HUB_SPRITES = 24; // bounded glow-sprite pool (selection + neighbours + hubs)
 
+// Per-brain accent. The vault renders in its native per-project palette; the
+// Cognee ("second brain") graph reuses this SAME renderer but is tinted toward a
+// teal accent so the two brains read as visually distinct without a fork. The
+// atmosphere rim follows suit. Node hues keep their per-cluster variety (lerp,
+// not replace) so cognee clusters stay distinguishable from one another.
+const COGNEE_ACCENT = 0x22d3ee; // teal/cyan — vs the vault's violet/blue families
+const VAULT_ATMO = 0x4f74ff;
+const COGNEE_ATMO = 0x22d3ee;
+
 // soft round sprite (white; tinted per-sprite)
 function makeDotTexture(soft) {
   const s = 64;
@@ -156,6 +165,9 @@ export default function MemorySphere({
   selectedId = null,
   neighborIds = null,
   onSelect,
+  // "vault" (default) | "cognee" — selects the accent palette only; the geometry,
+  // layout, and interaction are identical across brains (reuse, not fork).
+  variant = "vault",
 }) {
   const mountRef = useRef(null);
   const tipRef = useRef(null);
@@ -165,7 +177,7 @@ export default function MemorySphere({
   // Rebuild the scene whenever the graph identity changes (count is a cheap proxy
   // that also covers the empty→loaded transition). softLinks count is included so
   // a late-arriving soft layer triggers a rebuild.
-  const graphKey = `${nodes.length}:${links.length}:${softLinks.length}`;
+  const graphKey = `${variant}:${nodes.length}:${links.length}:${softLinks.length}`;
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -198,7 +210,14 @@ export default function MemorySphere({
     // ── derived graph data ────────────────────────────────────────────────────
     const indexById = new Map(nodes.map((n, i) => [n.id, i]));
     const positions = clusterPositions(nodes);
-    const colors = nodes.map((n) => new THREE.Color(nodeColor(n)));
+    // Cognee brain: pull every cluster hue toward the teal accent so the graph
+    // reads as a different brain, while keeping per-cluster variety (lerp, not
+    // overwrite). Vault keeps its native palette.
+    const cogneeAccent = new THREE.Color(COGNEE_ACCENT);
+    const colors = nodes.map((n) => {
+      const c = new THREE.Color(nodeColor(n));
+      return variant === "cognee" ? c.lerp(cogneeAccent, 0.55) : c;
+    });
     const surfacePos = positions.map((p) => p.clone().multiplyScalar(1.012));
 
     // adjacency for neighbour lighting (used when the parent doesn't supply it)
@@ -252,7 +271,7 @@ export default function MemorySphere({
     // ── atmosphere rim ────────────────────────────────────────────────────────
     const atmoGeo = new THREE.SphereGeometry(RADIUS * 1.035, 48, 48);
     const atmoMat = new THREE.ShaderMaterial({
-      uniforms: { uColor: { value: new THREE.Color(0x4f74ff) } },
+      uniforms: { uColor: { value: new THREE.Color(variant === "cognee" ? COGNEE_ATMO : VAULT_ATMO) } },
       vertexShader: `varying vec3 vN; varying vec3 vW;
         void main(){ vN=normalize(normalMatrix*normal); vec4 wp=modelMatrix*vec4(position,1.0); vW=wp.xyz; gl_Position=projectionMatrix*viewMatrix*wp; }`,
       fragmentShader: `uniform vec3 uColor; varying vec3 vN; varying vec3 vW;

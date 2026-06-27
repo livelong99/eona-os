@@ -7,7 +7,7 @@ interface MemorySidebarProps {
   /** Live vault counts from the loaded graph. */
   stats: { notes: number; links: number; projects: number };
   /** Which backend answered the active search, or null when idle. */
-  searchSource: "brain" | "filesystem" | null;
+  searchSource: "brain" | "filesystem" | "cognee" | null;
   /** Number of search hits, or null when idle. */
   searchCount: number | null;
 }
@@ -37,7 +37,17 @@ export function MemorySidebar({ query, onQuery, stats, searchSource, searchCount
         </div>
         {searchSource && searchCount != null ? (
           <p className="mt-1.5 flex items-center gap-1.5 text-[11px] text-white/40">
-            <Sparkles className="h-3 w-3" style={{ color: searchSource === "brain" ? "#a78bfa" : "#8a8fa3" }} />
+            <Sparkles
+              className="h-3 w-3"
+              style={{
+                color:
+                  searchSource === "brain"
+                    ? "#a78bfa"
+                    : searchSource === "cognee"
+                      ? "#22d3ee"
+                      : "#8a8fa3",
+              }}
+            />
             {searchCount} {searchCount === 1 ? "match" : "matches"} · via {searchSource}
           </p>
         ) : (

@@ -4,6 +4,7 @@
 // browser. Mirrors src/lib/integrations/engineClient.ts.
 //
 //   getMemoryGraph → GET /v1/memory/graph
+//   getCogneeGraph → GET /v1/memory/cognee/graph  (same contract, derived brain)
 //   getNote        → GET /v1/memory/note?path=<id>
 //   searchMemory   → GET /v1/memory/search?q=&k=
 
@@ -32,6 +33,34 @@ export interface GraphNode {
   updated: string;
   snippet: string;
   pinned: boolean;
+
+  // ── Cognee-only ride-along fields ─────────────────────────────────────────
+  // Present only on nodes from the Cognee graph (/v1/memory/cognee/graph). The
+  // 3D renderer ignores unknown keys; CogneeNodeDetail reads these straight from
+  // the already-loaded node, so the detail card needs no second fetch.
+  /** Entity description — the detail snippet for a Cognee entity. */
+  description?: string;
+  /** Typed relationships to other entities. */
+  relations?: CogneeRelation[];
+  /** Source-note snippets the entity was derived from. */
+  sources?: CogneeSource[];
+}
+
+/** A Cognee entity's typed relationship to another entity. */
+export interface CogneeRelation {
+  /** Related entity name or id. */
+  target: string;
+  /** Human-readable relationship label, e.g. "works_on". */
+  label?: string;
+  kind?: string;
+}
+
+/** A source-note snippet a Cognee entity was extracted from. */
+export interface CogneeSource {
+  /** Vault-relative path of the source note, when known. */
+  path?: string;
+  title?: string;
+  snippet: string;
 }
 
 /** A `[[wikilink]]` edge between two note ids (paths). */
@@ -91,7 +120,7 @@ export interface SearchResult {
 export interface SearchResponse {
   results: SearchResult[];
   /** Which backend answered — surfaced as a small UI hint. */
-  source: "brain" | "filesystem";
+  source: "brain" | "filesystem" | "cognee";
 }
 
 /** Loads the whole vault graph (nodes + edges + project palette). */
@@ -102,6 +131,29 @@ export async function getMemoryGraph(signal?: AbortSignal): Promise<MemoryGraph>
     signal,
   });
   if (!res.ok) throw new Error(`memory graph failed: ${res.status}`);
+  const data = (await res.json()) as Partial<MemoryGraph>;
+  return {
+    nodes: data.nodes ?? [],
+    links: data.links ?? [],
+    softLinks: data.softLinks ?? [],
+    projects: data.projects ?? [],
+  };
+}
+
+/**
+ * Loads the Cognee knowledge graph (the derived "second brain" built from the
+ * vault). Shares the exact `MemoryGraph` contract with `getMemoryGraph`, so the
+ * same 3D renderer consumes it. The endpoint is fail-open server-side: an empty
+ * `{nodes:[],links:[],…}` means Cognee isn't running / hasn't ingested yet — the
+ * caller surfaces a graceful "no Cognee data yet" state rather than an error.
+ */
+export async function getCogneeGraph(signal?: AbortSignal): Promise<MemoryGraph> {
+  const res = await fetch(`${API_BASE}/v1/memory/cognee/graph`, {
+    method: "GET",
+    headers: { "Content-Type": "application/json" },
+    signal,
+  });
+  if (!res.ok) throw new Error(`cognee graph failed: ${res.status}`);
   const data = (await res.json()) as Partial<MemoryGraph>;
   return {
     nodes: data.nodes ?? [],
@@ -148,6 +200,7 @@ export async function searchMemory(
   const data = (await res.json()) as Partial<SearchResponse>;
   return {
     results: data.results ?? [],
-    source: data.source === "brain" ? "brain" : "filesystem",
+    source:
+      data.source === "brain" ? "brain" : data.source === "cognee" ? "cognee" : "filesystem",
   };
 }

@@ -1,32 +1,41 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Brain, Orbit, X, RotateCw, AlertTriangle, Sparkles, Spline } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Brain, X, Sparkles } from "lucide-react";
 import { GlassPanel } from "@/components/ui/glass-panel";
 import { MemorySidebar } from "@/components/memory/MemorySidebar";
 import { NodeDetail } from "@/components/memory/NodeDetail";
-import { projectColor } from "@/lib/memory";
+import { CogneeNodeDetail } from "@/components/memory/CogneeNodeDetail";
+import { BrainToggle, type Brain as BrainMode } from "@/components/memory/BrainToggle";
+import { GraphStage } from "@/components/memory/GraphStage";
 import {
   getMemoryGraph,
+  getCogneeGraph,
   searchMemory,
   type MemoryGraph,
   type SearchResponse,
 } from "@/lib/memory/engineClient";
 
-// MemorySphere renders the 3D graph via three.js (~498kB). Lazy-load it so three
-// stays off the eager chunk — the screen's own "Loading knowledge graph…" skeleton
-// already covers the gap until the graph (and now the chunk) is ready.
-const MemorySphere = lazy(() => import("@/components/memory/MemorySphere"));
+// A selected node, tagged with the brain that produced it. Cognee nodes carry an
+// id like `cognee:<entity>` (not a vault path) — so they route to CogneeNodeDetail
+// and must NEVER hit getNote(); only real vault ids do.
+type Selection = { id: string; brain: "vault" | "cognee" };
 
-// MemoryScreen — a 3D sphere of the *live* Obsidian vault (left: search + filters),
-// with a node-detail card overlaying the sphere when a note is selected. The graph
-// (nodes + edges + project palette) is loaded from the engine on mount; search is
-// Brain-backed with a filesystem fallback.
+const isCogneeId = (id: string) => id.startsWith("cognee:");
+
+// MemoryScreen — a 3D sphere of the *live* Obsidian vault, now dual-brain: an
+// Obsidian · Cognee · Both selector switches the active brain (or shows both side
+// by side). The vault and Cognee graphs share one contract and one renderer
+// (MemorySphere), so the Cognee view differs only by accent palette. Search is
+// Brain-backed (vault) with a filesystem fallback; the source chip reports which
+// brain answered. Defaults to Obsidian so the screen is unchanged on load.
 export function MemoryScreen() {
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Selection | null>(null);
   // Soft "related" edges (shared tag/folder) are shown by default as ambient context.
   const [showSoftEdges, setShowSoftEdges] = useState(true);
+  // Active brain — default Obsidian keeps the current view byte-for-byte on load.
+  const [brain, setBrain] = useState<BrainMode>("obsidian");
 
-  // ── graph load ────────────────────────────────────────────────────────────
+  // ── vault graph load ──────────────────────────────────────────────────────
   const [graph, setGraph] = useState<MemoryGraph | null>(null);
   const [graphError, setGraphError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,6 +58,44 @@ export function MemoryScreen() {
   }, []);
 
   useEffect(() => loadGraph(), [loadGraph]);
+
+  // ── Cognee graph load (lazy — only fetched when a Cognee-bearing brain is on) ─
+  const [cogneeGraph, setCogneeGraph] = useState<MemoryGraph | null>(null);
+  const [cogneeError, setCogneeError] = useState<string | null>(null);
+  const [cogneeLoading, setCogneeLoading] = useState(false);
+  const cogneeAbort = useRef<AbortController | null>(null);
+  const cogneeRequested = useRef(false);
+
+  const loadCogneeGraph = useCallback(() => {
+    cogneeAbort.current?.abort();
+    const ctrl = new AbortController();
+    cogneeAbort.current = ctrl;
+    cogneeRequested.current = true;
+    setCogneeLoading(true);
+    setCogneeError(null);
+    getCogneeGraph(ctrl.signal)
+      .then((g) => {
+        if (ctrl.signal.aborted) return;
+        setCogneeGraph(g);
+        setCogneeLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (ctrl.signal.aborted) return;
+        setCogneeError(err instanceof Error ? err.message : "Failed to load Cognee graph");
+        setCogneeLoading(false);
+      });
+  }, []);
+
+  // Kick the Cognee load the first time the user views it; abort only on unmount
+  // (not on every brain toggle) so switching Cognee↔Both reuses the loaded graph.
+  useEffect(() => {
+    if (brain !== "obsidian" && !cogneeRequested.current) loadCogneeGraph();
+  }, [brain, loadCogneeGraph]);
+  useEffect(() => () => cogneeAbort.current?.abort(), []);
+
+  // Switching brains clears the selection so a stale vault note can't linger over
+  // the Cognee view (and vice-versa).
+  useEffect(() => setSelected(null), [brain]);
 
   // ── Brain search (debounced) ──────────────────────────────────────────────
   const [search, setSearch] = useState<SearchResponse | null>(null);
@@ -82,38 +129,72 @@ export function MemoryScreen() {
     [search],
   );
 
-  // Project legend (deduped, stable colour) for the bottom-left chips.
-  const projects = useMemo(() => {
-    if (!graph) return [];
-    const provided = graph.projects?.length
-      ? graph.projects
-      : [...new Set(graph.nodes.map((n) => n.project).filter(Boolean))].map((id) => ({
-          id: id as string,
-          label: id as string,
-          color: projectColor(id),
-        }));
-    // top projects by node count so the legend stays compact
-    const counts = new Map<string, number>();
-    for (const n of graph.nodes) if (n.project) counts.set(n.project, (counts.get(n.project) ?? 0) + 1);
-    return [...provided]
-      .sort((a, b) => (counts.get(b.id) ?? 0) - (counts.get(a.id) ?? 0))
-      .slice(0, 8);
-  }, [graph]);
-
+  // Sidebar stats stay vault-centric (the search box queries the vault brain).
   const stats = useMemo(() => {
     if (!graph) return { notes: 0, links: 0, projects: 0 };
     const projectSet = new Set(graph.nodes.map((n) => n.project).filter(Boolean));
     return { notes: graph.nodes.length, links: graph.links.length, projects: projectSet.size };
   }, [graph]);
 
-  // Only surface the soft-edge toggle/legend when the engine actually sent them
-  // (older engines omit softLinks — stay graceful).
-  const hasSoftEdges = (graph?.softLinks?.length ?? 0) > 0;
+  // The selected Cognee node, resolved from the already-loaded graph (no fetch).
+  const cogneeNode = useMemo(() => {
+    if (!selected || !cogneeGraph) return null;
+    if (selected.brain !== "cognee" && !isCogneeId(selected.id)) return null;
+    return cogneeGraph.nodes.find((n) => n.id === selected.id) ?? null;
+  }, [selected, cogneeGraph]);
+
+  const selectVault = useCallback(
+    (id: string | null) => setSelected(id ? { id, brain: "vault" } : null),
+    [],
+  );
+  const selectCognee = useCallback(
+    (id: string | null) => setSelected(id ? { id, brain: "cognee" } : null),
+    [],
+  );
+  const toggleSoft = useCallback(() => setShowSoftEdges((v) => !v), []);
+
+  const vaultStage = (
+    <GraphStage
+      variant="vault"
+      graph={graph}
+      loading={loading}
+      error={graphError}
+      onRetry={loadGraph}
+      query={query}
+      matchIds={matchIds}
+      selectedId={selected?.brain === "vault" ? selected.id : null}
+      onSelect={selectVault}
+      showSoftEdges={showSoftEdges}
+      onToggleSoftEdges={toggleSoft}
+    />
+  );
+
+  const cogneeStage = (
+    <GraphStage
+      variant="cognee"
+      graph={cogneeGraph}
+      loading={cogneeLoading}
+      error={cogneeError}
+      onRetry={loadCogneeGraph}
+      query={query}
+      // Brain-search hits are vault paths; don't dim the Cognee sphere with them.
+      matchIds={null}
+      selectedId={selected?.brain === "cognee" ? selected.id : null}
+      onSelect={selectCognee}
+      showSoftEdges={showSoftEdges}
+      onToggleSoftEdges={toggleSoft}
+    />
+  );
+
+  // Cognee ids never resolve to a vault note — route them to CogneeNodeDetail and
+  // never to getNote(). Vault detail only renders for real vault ids.
+  const showCogneeDetail = !!selected && (selected.brain === "cognee" || isCogneeId(selected.id));
+  const showVaultDetail = !!selected && !showCogneeDetail;
 
   return (
     <section className="absolute inset-0 z-10 flex justify-center px-[3vw] pb-5 pt-20">
       <div className="relative flex w-full max-w-[1440px] gap-4">
-        {/* Left panel — search + filters */}
+        {/* Left panel — brain selector, search + filters */}
         <GlassPanel className="w-[300px] shrink-0">
           <div className="flex h-full flex-col gap-4 p-4">
             <header className="flex items-center gap-3">
@@ -128,6 +209,8 @@ export function MemoryScreen() {
               </div>
             </header>
 
+            <BrainToggle value={brain} onChange={setBrain} />
+
             <div className="min-h-0 flex-1">
               <MemorySidebar
                 query={query}
@@ -140,77 +223,30 @@ export function MemoryScreen() {
           </div>
         </GlassPanel>
 
-        {/* Right panel — the node sphere */}
+        {/* Right panel — the node sphere(s) */}
         <GlassPanel className="min-w-0 flex-1">
           <div className="relative h-full">
-            {/* legend / hint */}
-            <div className="pointer-events-none absolute left-5 top-4 z-10 flex items-center gap-2 text-[12px] text-white/45">
-              <Orbit className="h-4 w-4 text-[#a78bfa]" />
-              <span>Knowledge graph · drag to rotate · click a node</span>
-            </div>
-
-            {/* project legend */}
-            {projects.length > 0 && (
-              <div className="absolute bottom-4 left-5 z-10 flex max-w-[60%] flex-wrap gap-x-3 gap-y-1">
-                {projects.map((p) => (
-                  <span key={p.id} className="flex items-center gap-1.5 text-[11px] text-white/50">
-                    <span className="h-2 w-2 rounded-full" style={{ background: p.color }} />
-                    {p.label}
-                  </span>
-                ))}
-              </div>
-            )}
-
-            {/* link-type legend + soft-edge toggle (bottom-right) */}
-            {graph && !graphError && (
-              <div className="absolute bottom-4 right-5 z-10 flex flex-col items-end gap-1.5">
-                <div className="flex items-center gap-3 text-[11px] text-white/45">
-                  <span className="flex items-center gap-1.5">
-                    <span className="h-[2px] w-4 rounded-full bg-[#9ab4ff]" />
-                    links
-                  </span>
-                  {hasSoftEdges && (
-                    <span className="flex items-center gap-1.5">
-                      <span
-                        className="h-[2px] w-4 rounded-full"
-                        style={{ background: "#6b7280", opacity: showSoftEdges ? 0.7 : 0.25 }}
-                      />
-                      related
-                    </span>
-                  )}
-                </div>
-                {hasSoftEdges && (
-                  <button
-                    type="button"
-                    onClick={() => setShowSoftEdges((v) => !v)}
-                    aria-pressed={showSoftEdges}
-                    title="Toggle the faint shared-tag / shared-folder web"
-                    className="inline-flex items-center gap-1.5 rounded-full border border-white/12 bg-white/[0.05] px-2.5 py-1 text-[11px] font-medium text-white/70 backdrop-blur-md transition-colors hover:bg-white/[0.09] cursor-pointer"
-                  >
-                    <Spline className="h-3 w-3" style={{ color: showSoftEdges ? "#a78bfa" : "#8a8fa3" }} />
-                    Related links
-                    <span
-                      className="ml-0.5 inline-flex h-3.5 w-6 items-center rounded-full p-0.5 transition-colors"
-                      style={{ background: showSoftEdges ? "#5227FF" : "rgba(255,255,255,0.15)" }}
-                    >
-                      <span
-                        className="h-2.5 w-2.5 rounded-full bg-white transition-transform"
-                        style={{ transform: showSoftEdges ? "translateX(10px)" : "translateX(0)" }}
-                      />
-                    </span>
-                  </button>
-                )}
-              </div>
-            )}
-
-            {/* active search chip + brain/fs hint */}
+            {/* active search chip + brain/fs/cognee hint */}
             {query && (
-              <div className="absolute right-5 top-4 z-10 inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/[0.06] px-3 py-1 text-[12px] text-white/75 backdrop-blur-md">
+              <div className="absolute right-5 top-4 z-30 inline-flex items-center gap-2 rounded-full border border-white/12 bg-white/[0.06] px-3 py-1 text-[12px] text-white/75 backdrop-blur-md">
                 {search && (
                   <span
                     className="inline-flex items-center gap-1 text-[10px] uppercase tracking-wide"
-                    style={{ color: search.source === "brain" ? "#a78bfa" : "#8a8fa3" }}
-                    title={search.source === "brain" ? "Semantic results via Brain" : "Literal results via filesystem"}
+                    style={{
+                      color:
+                        search.source === "brain"
+                          ? "#a78bfa"
+                          : search.source === "cognee"
+                            ? "#22d3ee"
+                            : "#8a8fa3",
+                    }}
+                    title={
+                      search.source === "brain"
+                        ? "Semantic results via Brain"
+                        : search.source === "cognee"
+                          ? "Semantic results via Cognee"
+                          : "Literal results via filesystem"
+                    }
                   >
                     <Sparkles className="h-3 w-3" />
                     via {search.source}
@@ -229,60 +265,32 @@ export function MemoryScreen() {
               </div>
             )}
 
-            {/* loading skeleton — reserves layout */}
-            {loading && (
-              <div className="absolute inset-0 z-20 grid place-items-center">
-                <div className="flex flex-col items-center gap-3 text-white/45">
-                  <div className="h-24 w-24 animate-pulse rounded-full border border-white/10 bg-white/[0.04]" />
-                  <p className="text-[12px]">Loading knowledge graph…</p>
+            {/* stage(s): single brain, or a split view for "Both" */}
+            {brain === "both" ? (
+              <div className="flex h-full gap-3">
+                <div className="relative min-w-0 flex-1 overflow-hidden rounded-2xl border border-white/[0.06]">
+                  {vaultStage}
+                </div>
+                <div className="relative min-w-0 flex-1 overflow-hidden rounded-2xl border border-white/[0.06]">
+                  {cogneeStage}
                 </div>
               </div>
+            ) : brain === "cognee" ? (
+              cogneeStage
+            ) : (
+              vaultStage
             )}
 
-            {/* error + retry */}
-            {!loading && graphError && (
-              <div className="absolute inset-0 z-20 grid place-items-center">
-                <div className="flex max-w-[320px] flex-col items-center gap-3 text-center">
-                  <span className="grid h-12 w-12 place-items-center rounded-full bg-[#f87171]/15">
-                    <AlertTriangle className="h-6 w-6 text-[#f87171]" />
-                  </span>
-                  <p className="text-[13px] text-white/70">Couldn’t reach the vault graph.</p>
-                  <p className="text-[11px] text-white/35">{graphError}</p>
-                  <button
-                    type="button"
-                    onClick={loadGraph}
-                    className="mt-1 inline-flex items-center gap-1.5 rounded-lg border border-white/12 bg-white/[0.05] px-3 py-1.5 text-[12.5px] font-medium text-white/80 transition-colors hover:bg-white/[0.09] cursor-pointer"
-                  >
-                    <RotateCw className="h-3.5 w-3.5" />
-                    Retry
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* the sphere — only mounts once a graph is present; three.js streams
-                in lazily, so the screen's loading skeleton (above) covers the gap */}
-            {graph && !graphError && (
-              <Suspense fallback={null}>
-                <MemorySphere
-                  nodes={graph.nodes}
-                  links={graph.links}
-                  softLinks={graph.softLinks}
-                  showSoftEdges={showSoftEdges}
-                  query={query}
-                  matchIds={matchIds}
-                  selectedId={selected}
-                  onSelect={setSelected}
-                />
-              </Suspense>
-            )}
-
-            {selected && (
+            {/* brain-aware detail card */}
+            {showVaultDetail && selected && (
               <NodeDetail
-                nodeId={selected}
+                nodeId={selected.id}
                 onClose={() => setSelected(null)}
-                onSelect={setSelected}
+                onSelect={selectVault}
               />
+            )}
+            {showCogneeDetail && cogneeNode && (
+              <CogneeNodeDetail node={cogneeNode} onClose={() => setSelected(null)} />
             )}
           </div>
         </GlassPanel>

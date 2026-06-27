@@ -19,6 +19,12 @@ export interface MemorySphereProps {
   /** Precomputed neighbour ids of the selected node (from getNote links/backlinks). */
   neighborIds?: string[] | null;
   onSelect?: (id: string | null) => void;
+  /**
+   * Which brain's accent palette to render. "vault" (default) keeps the native
+   * per-project colours; "cognee" tints clusters + atmosphere toward teal so the
+   * derived knowledge graph reads as a distinct brain. Palette only — no fork.
+   */
+  variant?: "vault" | "cognee";
 }
 
 declare const MemorySphere: FC<MemorySphereProps>;
