@@ -181,15 +181,19 @@ services:
     restart: unless-stopped
     profiles: ["cognee"] # OFF by default — only starts when the cognee profile is enabled
     env_file:
-      - path: ${HOME}/.hermes/.env # optional extra cognify settings (e.g. LLM_MODEL/LLM_PROVIDER)
+      # Dedicated cognee-only config (LLM = Nemotron via OpenCode; embeddings = local
+      # fastembed) — NOT the shared ~/.hermes/.env, so the cognee container never gets
+      # hermes's Claude token / API key and there's no LLM_MODEL collision with the
+      # engine. required:false so a config-check still passes when absent; the file is
+      # part of enabling the cognee profile (see ~/.hermes/cognee.env).
+      - path: ${HOME}/.hermes/cognee.env
         required: false
     environment:
       - VECTOR_DB_PROVIDER=lancedb # local vectors
       - GRAPH_DATABASE_PROVIDER=kuzu # local graph
       - DB_PROVIDER=sqlite # local relational
-      # cognify/extraction LLM — the per-document token cost. Keyed from ~/.hermes/.env
-      # via the same compose-interpolation idiom as TWENTYFIRST_API_KEY on hermes.
-      - LLM_API_KEY=${COGNEE_LLM_API_KEY:-}
+      # The cognify LLM + the embedding model come from ~/.hermes/cognee.env above
+      # (LLM_*/EMBEDDING_* — keyed, never inline). That file holds the only secret.
     volumes:
       - cognee_data:/cognee/.data # local stores (sqlite + lancedb + kuzu)
       # Obsidian vault (read-only) — the ingest source. NEVER written back to.
