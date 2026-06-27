@@ -66,8 +66,10 @@ _EMBED_DIM = 768
 _VALID_BRAIN_MODES = ("obsidian", "cognee", "unified")
 
 # Cognee graph-recall service — a derived, rebuildable, fail-open REST index over
-# the read-only vault. Never the source of truth. Override with COGNEE_URL.
-_COGNEE_URL = os.environ.get("COGNEE_URL", "http://127.0.0.1:8765").rstrip("/")
+# the read-only vault. Never the source of truth. The live transport (login +
+# bearer + /api/v1 paths) lives in agent.cognee_client; COGNEE_URL + creds are
+# configured there. The dataset cognified from the vault (override COGNEE_DATASET).
+_COGNEE_DATASET = os.environ.get("COGNEE_DATASET", "vault")
 
 # Namespace → vault-relative directory for append writes
 _NAMESPACE_DIRS: Dict[str, str] = {
@@ -187,43 +189,51 @@ def _qdrant_search(vector: List[float], k: int) -> List[Dict[str, Any]]:
 
 
 def _cognee_recall(query: str, k: int) -> List[Dict[str, Any]]:
-    """POST a recall query to the Cognee REST service. Returns [] on any failure.
+    """POST a recall query to the live Cognee API. Returns [] on any failure.
 
     Mirrors ``_qdrant_search``'s fail-open shape exactly: Cognee is a derived,
     rebuildable recall lane over the read-only vault — service down, unreachable,
-    timing out, returning non-200, malformed, or not-yet-ingested all degrade to
-    ``[]`` and never raise, so a turn is never blocked. A thin ``urllib`` HTTP
-    client — no SDK dependency is added to engine/pyproject.toml.
-    """
-    import urllib.request
-    import urllib.error
+    not-yet-ingested, un-authenticated, or malformed all degrade to ``[]`` and
+    never raise, so a turn is never blocked. Transport (login + bearer + the
+    ``/api/v1`` base) is the shared ``agent.cognee_client``; no SDK dependency.
 
-    url = f"{_COGNEE_URL}/search"
-    body = {"query": query, "search_type": "GRAPH_COMPLETION", "top_k": k}
-    data = json.dumps(body).encode()
-    req = urllib.request.Request(
-        url, data=data, headers={"content-type": "application/json"}
-    )
+    Uses ``POST /api/v1/recall`` scoped to the vault dataset by NAME (recall
+    accepts ``datasets`` directly, so no dataset-id resolution is needed here).
+    The response is a JSON array; elements may be dicts (entity hits) or strings
+    (GRAPH_COMPLETION answers) — both are normalised to ``{"text": ...}`` dicts
+    so ``_similar_via_cognee`` can map them.
+    """
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            if getattr(resp, "status", 200) != 200:
-                return []
-            result = json.loads(resp.read().decode())
-    except Exception as exc:
-        logger.debug("Brain: Cognee recall failed (non-fatal): %s", exc)
+        from agent import cognee_client  # shared fail-open client
+    except Exception:  # pragma: no cover - layout fallback (mirrors brain_timewalk)
+        try:
+            import cognee_client  # type: ignore[no-redef]
+        except Exception:
+            return []
+
+    result = cognee_client.request(
+        "POST",
+        "/recall",
+        json_body={
+            "query": query,
+            "searchType": "GRAPH_COMPLETION",
+            "datasets": [_COGNEE_DATASET],
+            "topK": k,
+        },
+    )
+    if result is None:
         return []
 
-    # Cognee REST may return a bare list or a {results|data|hits: [...]} envelope.
+    # The recall response is a JSON array; tolerate an enveloped dict too.
     if isinstance(result, dict):
-        hits = (
-            result.get("results")
-            or result.get("data")
-            or result.get("hits")
-            or []
-        )
+        hits = result.get("results") or result.get("data") or result.get("hits") or []
     else:
         hits = result
-    return hits if isinstance(hits, list) else []
+    if not isinstance(hits, list):
+        return []
+
+    # Normalise bare-string completions to dicts so the lane can map them.
+    return [{"text": h} if isinstance(h, str) else h for h in hits]
 
 
 # ---------------------------------------------------------------------------

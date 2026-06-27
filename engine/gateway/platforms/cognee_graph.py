@@ -19,7 +19,6 @@ Invariants (see ``openspec/changes/cognee-dual-brain/design.md``):
 """
 from __future__ import annotations
 
-import json
 import logging
 import os
 import threading
@@ -31,9 +30,10 @@ from gateway.platforms.vault_graph import _PROJECT_COLORS
 
 logger = logging.getLogger(__name__)
 
-# Cognee REST base — same default + override as agent.brain (``COGNEE_URL``).
-_COGNEE_URL = os.environ.get("COGNEE_URL", "http://127.0.0.1:8765").rstrip("/")
-_TIMEOUT = 10  # seconds; mirrors brain.py's fail-open network calls
+# The vault is cognified into a single named dataset; the graph is per-dataset
+# (``GET /api/v1/datasets/{id}/graph``), so we resolve the name → id first.
+# Transport (login + bearer + COGNEE_URL) lives in agent.cognee_client.
+_COGNEE_DATASET = os.environ.get("COGNEE_DATASET", "vault")
 
 # Cache idiom mirrors ``vault_graph.build_graph`` so the Cognee read isn't
 # per-request. Only *successful* builds are cached; a failed (error) build is
@@ -53,24 +53,26 @@ def _empty_graph() -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _fetch_cognee_graph() -> Tuple[List[Any], List[Any], Optional[str]]:
-    """GET Cognee's graph over REST.
+    """Read the vault dataset's graph from the live Cognee API.
 
-    Returns ``(nodes, edges, error)``. On any failure ``nodes``/``edges`` are
-    empty and ``error`` is a short string; on success ``error`` is ``None``.
-    Never raises.
+    Login → resolve the ``vault`` dataset id → ``GET /api/v1/datasets/{id}/graph``
+    (all via the shared fail-open ``agent.cognee_client``). Returns
+    ``(nodes, edges, error)``: on any failure (down / unauthenticated / dataset
+    not yet cognified / malformed) ``nodes``/``edges`` are empty and ``error`` is
+    a short string; on success ``error`` is ``None``. Never raises.
     """
-    import urllib.request
-
-    url = f"{_COGNEE_URL}/graph"
-    req = urllib.request.Request(url, headers={"accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:  # noqa: S310 (trusted local URL)
-            if getattr(resp, "status", 200) != 200:
-                return [], [], f"cognee returned status {getattr(resp, 'status', '?')}"
-            payload = json.loads(resp.read().decode())
-    except Exception as exc:  # unreachable / timeout / malformed → fail-open
-        logger.debug("Cognee graph fetch failed (non-fatal): %s", exc)
-        return [], [], str(exc)
+        from agent import cognee_client
+    except Exception as exc:  # pragma: no cover - import-layout fallback
+        return [], [], f"cognee_client unavailable: {exc}"
+
+    dataset_id = cognee_client.resolve_dataset_id(_COGNEE_DATASET)
+    if not dataset_id:
+        return [], [], f"cognee dataset '{_COGNEE_DATASET}' not found (not ingested?)"
+
+    payload = cognee_client.request("GET", f"/datasets/{dataset_id}/graph")
+    if payload is None:
+        return [], [], "cognee graph fetch failed (unreachable / unauthorized)"
 
     nodes, edges = _split_payload(payload)
     return nodes, edges, None
@@ -205,6 +207,19 @@ def _edge_fields(edge: Any) -> Tuple[Optional[str], Optional[str], str]:
     return None, None, ""
 
 
+def _flatten_node(node: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge a GraphNodeDTO's nested ``properties`` (the entity attributes —
+    name/description/sources) up with its top-level keys (id/label/type), so the
+    node-attribute helpers find a field in either location. Top-level wins on a
+    key clash. (The live Cognee graph nests entity attrs under ``properties``.)"""
+    props = node.get("properties")
+    flat: Dict[str, Any] = dict(props) if isinstance(props, dict) else {}
+    for key, val in node.items():
+        if key != "properties":
+            flat[key] = val
+    return flat
+
+
 def _map_graph(raw_nodes: List[Any], raw_edges: List[Any]) -> Dict[str, Any]:
     """Map Cognee entities→nodes and relationships→links into the frozen graph
     contract. ``softLinks`` is always ``[]`` (Cognee edges are all real
@@ -216,13 +231,14 @@ def _map_graph(raw_nodes: List[Any], raw_edges: List[Any]) -> Dict[str, Any]:
     for rn in raw_nodes:
         if not isinstance(rn, dict):
             continue
-        nid = _node_id(rn)
+        attrs = _flatten_node(rn)
+        nid = _node_id(attrs)
         if not nid or nid in titles:
             continue
-        title = _node_title(rn, nid)
-        norm.append((nid, rn))
+        title = _node_title(attrs, nid)
+        norm.append((nid, attrs))
         titles[nid] = title
-        types[nid] = _node_type(rn)
+        types[nid] = _node_type(attrs)
 
     # Edges → links + degree + per-node relations (resolve target to a title).
     links: List[Dict[str, Any]] = []

@@ -2,20 +2,26 @@
 
 Covers the two contract guarantees Part 2 of ``cognee-dual-brain`` must hold:
 
-1. **Fail-open** — Cognee unreachable / not configured → an *empty* graph with
-   every frozen-contract key (``nodes/links/softLinks/projects``) and a 200
-   response (never 500, never block the Memory screen).
-2. **Shape parity** — a stubbed Cognee payload maps into the *same* JSON shape
-   the vault ``/v1/memory/graph`` returns, so ``MemorySphere`` is reused
+1. **Fail-open** — Cognee unreachable / unauthenticated / dataset not yet
+   ingested → an *empty* graph with every frozen-contract key
+   (``nodes/links/softLinks/projects``) and a 200 response (never 500, never
+   block the Memory screen).
+2. **Shape parity** — a live-shaped Cognee ``GraphDTO`` maps into the *same* JSON
+   shape the vault ``/v1/memory/graph`` returns, so ``MemorySphere`` is reused
    unchanged.
+
+The reader talks to the live Cognee API through ``agent.cognee_client`` (login +
+bearer + ``/api/v1`` paths), so these tests patch that shared client rather than
+``urlopen`` directly.
 """
 from contextlib import contextmanager
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
+from agent import cognee_client
 from gateway.config import PlatformConfig
 from gateway.platforms import cognee_graph
 from gateway.platforms.api_server import (
@@ -44,21 +50,15 @@ def _reset_cache():
 
 
 @contextmanager
-def _stub_urlopen(payload=None, *, raise_exc=None, status=200):
-    """Patch ``urllib.request.urlopen`` used inside ``_fetch_cognee_graph``."""
-    import json as _json
+def _stub_cognee(graph=None, *, dataset_id="ds-vault"):
+    """Patch the shared ``cognee_client`` the graph reader uses:
 
-    if raise_exc is not None:
-        with patch("urllib.request.urlopen", side_effect=raise_exc):
-            yield
-        return
-
-    resp = MagicMock()
-    resp.status = status
-    resp.read.return_value = _json.dumps(payload).encode()
-    resp.__enter__.return_value = resp
-    resp.__exit__.return_value = False
-    with patch("urllib.request.urlopen", return_value=resp):
+    - ``resolve_dataset_id`` → ``dataset_id`` (``None`` = dataset not found).
+    - ``request`` (the authed ``GET .../graph``) → ``graph`` (``None`` = the
+      client failed fail-open: unreachable / unauthorized / non-200).
+    """
+    with patch.object(cognee_client, "resolve_dataset_id", return_value=dataset_id), \
+         patch.object(cognee_client, "request", return_value=graph):
         yield
 
 
@@ -66,8 +66,9 @@ def _stub_urlopen(payload=None, *, raise_exc=None, status=200):
 # Reader: fail-open
 # ---------------------------------------------------------------------------
 
-def test_unreachable_cognee_yields_empty_graph_with_error():
-    with _stub_urlopen(raise_exc=OSError("connection refused")):
+def test_graph_request_failure_yields_empty_graph_with_error():
+    """Cognee unreachable / unauthorized → client returns None → empty + error."""
+    with _stub_cognee(graph=None):
         graph = cognee_graph.build_graph(force=True)
     assert _GRAPH_KEYS <= set(graph)
     assert graph["nodes"] == []
@@ -77,14 +78,16 @@ def test_unreachable_cognee_yields_empty_graph_with_error():
     assert graph["error"]  # error string is surfaced
 
 
-def test_non_200_status_is_fail_open():
-    with _stub_urlopen(payload={}, status=503):
+def test_dataset_not_found_is_fail_open():
+    """Vault dataset not ingested yet → empty graph + error, still 200-able."""
+    with _stub_cognee(dataset_id=None):
         graph = cognee_graph.build_graph(force=True)
     assert graph["nodes"] == [] and "error" in graph
+    assert "not found" in graph["error"]
 
 
 def test_malformed_payload_degrades_to_empty():
-    with _stub_urlopen(payload="not-a-graph"):
+    with _stub_cognee(graph="not-a-graph"):
         graph = cognee_graph.build_graph(force=True)
     assert graph["nodes"] == [] and graph["links"] == []
 
@@ -93,22 +96,25 @@ def test_malformed_payload_degrades_to_empty():
 # Reader: mapping / shape parity with the vault graph
 # ---------------------------------------------------------------------------
 
+# Live GraphDTO shape: nodes carry {id, label, type, properties:{...}} — entity
+# attributes (description/sources) are NESTED under properties; edges are
+# {source, target, label}.
 _SAMPLE = {
     "nodes": [
-        {"id": "e1", "name": "Ada Lovelace", "type": "Person",
-         "description": "First programmer.", "sources": ["20_Areas/people.md"]},
-        {"id": "e2", "name": "Analytical Engine", "type": "Concept",
-         "description": "Mechanical general-purpose computer."},
+        {"id": "e1", "label": "Ada Lovelace", "type": "Person",
+         "properties": {"description": "First programmer.",
+                        "sources": ["20_Areas/people.md"]}},
+        {"id": "e2", "label": "Analytical Engine", "type": "Concept",
+         "properties": {"description": "Mechanical general-purpose computer."}},
     ],
     "edges": [
-        {"source_node_id": "e1", "target_node_id": "e2",
-         "relationship_name": "designed"},
+        {"source": "e1", "target": "e2", "label": "designed"},
     ],
 }
 
 
 def test_sample_payload_maps_to_vault_graph_shape():
-    with _stub_urlopen(payload=_SAMPLE):
+    with _stub_cognee(graph=_SAMPLE):
         graph = cognee_graph.build_graph(force=True)
 
     assert set(graph) >= _GRAPH_KEYS
@@ -121,11 +127,11 @@ def test_sample_payload_maps_to_vault_graph_shape():
         assert _NODE_KEYS <= set(node)
 
     n1 = next(n for n in graph["nodes"] if n["id"] == "e1")
-    assert n1["title"] == "Ada Lovelace"
+    assert n1["title"] == "Ada Lovelace"      # from top-level label
     assert n1["project"] == "Person"          # type → cluster
     assert n1["tags"] == ["Person"]
     assert n1["degree"] == 1                   # one relationship
-    assert n1["snippet"] == "First programmer."
+    assert n1["snippet"] == "First programmer."  # from nested properties.description
     # Extras for the detail card ride along on the node. Sources are OBJECTS
     # ({path?, title?, snippet}) — the shape the frontend CogneeSource expects;
     # a bare string source string would render as an empty box.
@@ -142,21 +148,38 @@ def test_sample_payload_maps_to_vault_graph_shape():
         assert set(proj) == {"id", "label", "color"}
 
 
+def test_properties_are_flattened_for_node_attrs():
+    """Entity attrs nested under GraphNodeDTO.properties are read correctly."""
+    payload = {
+        "nodes": [{"id": "e1", "label": "Babbage", "type": "Person",
+                   "properties": {"name": "Charles Babbage",
+                                  "description": "Built the engine."}}],
+        "edges": [],
+    }
+    with _stub_cognee(graph=payload):
+        graph = cognee_graph.build_graph(force=True)
+    n = graph["nodes"][0]
+    # properties.name wins for the title; properties.description → snippet.
+    assert n["title"] == "Charles Babbage"
+    assert n["snippet"] == "Built the engine."
+    assert n["project"] == "Person"  # top-level type still read
+
+
 def test_sources_emit_objects_not_strings():
     """Cognee sources map to {path?, title?, snippet} objects (frontend
     CogneeSource), whether the payload carries bare strings or dicts."""
     payload = {
         "nodes": [{
-            "id": "e1", "name": "Ada", "type": "Person",
-            "sources": [
+            "id": "e1", "label": "Ada", "type": "Person",
+            "properties": {"sources": [
                 "20_Areas/people.md",  # bare string → {path, snippet:""}
                 {"path": "10_Projects/x/index.md", "title": "X Project",
                  "snippet": "Ada worked on X."},  # dict → all three fields
-            ],
+            ]},
         }],
         "edges": [],
     }
-    with _stub_urlopen(payload=payload):
+    with _stub_cognee(graph=payload):
         graph = cognee_graph.build_graph(force=True)
     sources = graph["nodes"][0]["sources"]
     assert sources == [
@@ -173,16 +196,16 @@ def test_dangling_edge_is_dropped_and_degree_unaffected():
     mirroring vault_graph's referential-integrity guard."""
     payload = {
         "nodes": [
-            {"id": "e1", "name": "Ada", "type": "Person"},
-            {"id": "e2", "name": "Engine", "type": "Concept"},
+            {"id": "e1", "label": "Ada", "type": "Person"},
+            {"id": "e2", "label": "Engine", "type": "Concept"},
         ],
         "edges": [
-            {"source_node_id": "e1", "target_node_id": "e2", "relationship_name": "designed"},
+            {"source": "e1", "target": "e2", "label": "designed"},
             # Dangling: e9 was never ingested → this edge must be ignored.
-            {"source_node_id": "e1", "target_node_id": "e9", "relationship_name": "phantom"},
+            {"source": "e1", "target": "e9", "label": "phantom"},
         ],
     }
-    with _stub_urlopen(payload=payload):
+    with _stub_cognee(graph=payload):
         graph = cognee_graph.build_graph(force=True)
 
     assert len(graph["links"]) == 1                       # phantom edge dropped
@@ -197,7 +220,7 @@ def test_node_contract_matches_vault_node_keys_exactly():
     MemorySphere (which reads the vault keys) needs no change."""
     vault = _build_graph_uncached()
     vault_node_keys = set(vault["nodes"][0]) if vault["nodes"] else _NODE_KEYS
-    with _stub_urlopen(payload=_SAMPLE):
+    with _stub_cognee(graph=_SAMPLE):
         graph = cognee_graph.build_graph(force=True)
     assert vault_node_keys <= set(graph["nodes"][0])
 
@@ -220,7 +243,7 @@ def _make_app() -> web.Application:
 async def test_route_returns_empty_graph_200_when_cognee_absent():
     app = _make_app()
     async with TestClient(TestServer(app)) as client:
-        with _stub_urlopen(raise_exc=OSError("connection refused")):
+        with _stub_cognee(graph=None):
             resp = await client.get("/v1/memory/cognee/graph")
         assert resp.status == 200
         body = await resp.json()
@@ -232,7 +255,7 @@ async def test_route_returns_empty_graph_200_when_cognee_absent():
 async def test_route_returns_mapped_graph_when_cognee_stubbed():
     app = _make_app()
     async with TestClient(TestServer(app)) as client:
-        with _stub_urlopen(payload=_SAMPLE):
+        with _stub_cognee(graph=_SAMPLE):
             resp = await client.get("/v1/memory/cognee/graph")
         assert resp.status == 200
         body = await resp.json()

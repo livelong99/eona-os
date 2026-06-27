@@ -67,16 +67,19 @@ class TestBrainMode:
 
 class TestCogneeLaneFailOpen:
     def test_recall_no_service_returns_empty(self):
-        # No Cognee listening on the default URL → [] (connection refused),
-        # and it must not raise.
-        assert _cognee_recall("anything", 5) == []
+        # No usable Cognee (login fails / unauthenticated → no token) → [] and
+        # never raises. Hermetic: independent of whether a Cognee is running.
+        with patch("agent.cognee_client.token", return_value=None):
+            assert _cognee_recall("anything", 5) == []
 
     def test_recall_swallows_exceptions(self):
+        # An exception anywhere in the transport (here: urlopen) → [] not raise.
         with patch("urllib.request.urlopen", side_effect=OSError("boom")):
             assert _cognee_recall("q", 3) == []
 
     def test_lane_no_service_returns_empty(self):
-        assert Brain()._similar_via_cognee("q", k=5) == []
+        with patch("agent.cognee_client.token", return_value=None):
+            assert Brain()._similar_via_cognee("q", k=5) == []
 
     def test_lane_maps_hits_to_brainfacts(self):
         hits = [
