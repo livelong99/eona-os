@@ -58,6 +58,27 @@ def register(app: "Any", adapter: "Any") -> None:  # type: ignore[name-defined]
             )
 
     # ------------------------------------------------------------------
+    # GET /v1/memory/cognee/graph — Cognee knowledge graph, mapped onto the
+    # SAME contract as /v1/memory/graph so MemorySphere is reused unchanged.
+    # Fail-open: Cognee down/unreachable/not-ingested → empty graph + 200
+    # (never 500, never block the Memory screen). Cached (TTL) in the reader.
+    # ------------------------------------------------------------------
+    async def _memory_cognee_graph(request: "web.Request") -> "web.Response":
+        if (auth := adapter._check_auth(request)) is not None:
+            return auth
+        try:
+            from gateway.platforms import cognee_graph
+            loop = asyncio.get_running_loop()
+            graph = await loop.run_in_executor(None, cognee_graph.build_graph)
+            return web.json_response(graph)
+        except Exception as exc:
+            logger.exception("/v1/memory/cognee/graph failed; returning empty graph")
+            return web.json_response(
+                {"nodes": [], "links": [], "softLinks": [], "projects": [],
+                 "error": str(exc)},
+            )
+
+    # ------------------------------------------------------------------
     # GET /v1/memory/note?path=<id> — note detail (content + links/backlinks).
     # Path is validated to stay within the vault root (traversal → 400).
     # ------------------------------------------------------------------
@@ -109,7 +130,7 @@ def register(app: "Any", adapter: "Any") -> None:  # type: ignore[name-defined]
         try:
             from gateway.platforms import vault_graph
 
-            def _brain_query() -> list[dict]:
+            def _brain_query() -> tuple[list[dict], bool]:
                 from agent.brain import Brain
                 brain = Brain(vault_dir=vault_graph.VAULT_ROOT)
                 result = brain.retrieve(query, k=k)
@@ -138,31 +159,58 @@ def register(app: "Any", adapter: "Any") -> None:  # type: ignore[name-defined]
 
                 out: list[dict] = []
                 seen_ids: set[str] = set()
+                cognee_used = False  # True once a surfaced hit came from the Cognee lane
                 for fact in result.similar:
+                    # A Cognee-lane fact is tagged by _similar_via_cognee with a
+                    # ``cognee_entity`` in its metadata (provenance stays "vault").
+                    is_cognee = bool(fact.metadata.get("cognee_entity"))
                     nid = _resolve(fact.source or "")
-                    if nid is None or nid not in meta or nid in seen_ids:
+                    if nid is not None and nid in meta and nid not in seen_ids:
+                        seen_ids.add(nid)
+                        m = meta[nid]
+                        out.append({
+                            "id": nid,
+                            "title": m["title"],
+                            "folder": m["folder"],
+                            "project": m["project"],
+                            "score": float(fact.score),
+                            "snippet": (fact.content or m.get("snippet") or "")[:220],
+                        })
+                        cognee_used = cognee_used or is_cognee
+                    elif is_cognee:
+                        # Cognee entity with no vault-node mapping — surface it
+                        # directly (don't drop it) so cognee/unified search stays
+                        # honest about which brain answered.
+                        entity = fact.metadata.get("cognee_entity") or fact.source or ""
+                        ent_id = f"cognee:{entity}"
+                        if not entity or ent_id in seen_ids:
+                            continue
+                        seen_ids.add(ent_id)
+                        cognee_used = True
+                        out.append({
+                            "id": ent_id,
+                            "title": str(entity),
+                            "folder": "Cognee",
+                            "project": None,
+                            "score": float(fact.score),
+                            "snippet": (fact.content or "")[:220],
+                        })
+                    else:
                         continue
-                    seen_ids.add(nid)
-                    m = meta[nid]
-                    out.append({
-                        "id": nid,
-                        "title": m["title"],
-                        "folder": m["folder"],
-                        "project": m["project"],
-                        "score": float(fact.score),
-                        "snippet": (fact.content or m.get("snippet") or "")[:220],
-                    })
                     if len(out) >= k:
                         break
-                return out
+                return out, cognee_used
 
-            brain_results = await loop.run_in_executor(None, _brain_query)
+            brain_results, cognee_used = await loop.run_in_executor(None, _brain_query)
         except Exception:
             logger.debug("/v1/memory/search: Brain lane failed (non-fatal)", exc_info=True)
-            brain_results = []
+            brain_results, cognee_used = [], False
 
         if brain_results:
-            return web.json_response({"results": brain_results, "source": "brain"})
+            # The Cognee lane only runs when HERMES_BRAIN_MODE includes Cognee
+            # (gated in Brain.retrieve), so cognee_used implies that mode.
+            source = "cognee" if cognee_used else "brain"
+            return web.json_response({"results": brain_results, "source": source})
 
         # Lane 2: filesystem full-text fallback.
         try:
@@ -178,5 +226,6 @@ def register(app: "Any", adapter: "Any") -> None:  # type: ignore[name-defined]
 
     app.router.add_get("/v1/memory", _memory)
     app.router.add_get("/v1/memory/graph", _memory_graph)
+    app.router.add_get("/v1/memory/cognee/graph", _memory_cognee_graph)
     app.router.add_get("/v1/memory/note", _memory_note)
     app.router.add_get("/v1/memory/search", _memory_search)
