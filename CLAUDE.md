@@ -12,6 +12,28 @@
 - Keep files under 500 lines
 - Validate input at system boundaries
 
+## Ponytail — binding code standard (every agent, every task)
+
+The rule is **never "fewest tokens."** It is: **write only what the task needs, and
+never cut validation, error handling, security, or accessibility.** Code ends up
+small because it's *necessary, not golfed*; lower cost/latency is a side effect, not
+the goal.
+
+**Climb the ladder before writing — read the real code/flow first ("lazy about the
+solution, never about reading"):**
+
+1. Does this need to exist? → skip it (YAGNI)
+2. Already in this codebase? → reuse it
+3. Stdlib does it? → use the stdlib
+4. Native platform feature? → use it
+5. Installed dependency? → use it
+6. One line? → write the one line
+7. Only then → the minimum that works
+
+**Never on the chopping block** (the ladder trims scope, never safety): trust-boundary
+validation, data-loss handling, security, accessibility. Full standard:
+[`.agent-os/standards/ponytail.md`](.agent-os/standards/ponytail.md).
+
 ## Agent Comms (SendMessage-First Coordination)
 
 Named agents coordinate via `SendMessage`, not polling or shared state.
@@ -178,3 +200,45 @@ npx ruflo@latest doctor --fix
 > by default; `--ttl 0` to disable, `daemon status --all` to audit running daemons).
 
 **Agent tool** handles execution (agents, files, code, git). **MCP tools** handle coordination (swarm, memory, hooks). **CLI** is the same via Bash.
+
+## Agent Team & Orchestration (Workspace Architect)
+
+This workspace is driven by the **Workspace Architect (Winston)** — an SDLC orchestrator that takes each
+feature from design → sprint → implemented, reviewed code. Winston orchestrates; a custom 9-agent team,
+authored to this codebase (Eona OS), executes. See `project-context.md` (deep briefing) and
+`openspec/project.md` (conventions). Pipeline state lives in `workspace.json`; per-feature specs live as
+OpenSpec changes under `openspec/changes/{slug}/`.
+
+### The team (`.agent-os/agents/{slug}/`)
+
+| Slug | Persona | Role |
+|------|---------|------|
+| `architect` | Winston 🏛️ | System architecture & technical design (OpenSpec design, readiness) |
+| `pm` | John 📋 | PRDs, epics & stories |
+| `ux-designer` | Sally 🎨 | UX/UI — owns the experience (HTML mockups + Framer-grade interaction, 21st.dev) |
+| `frontend-dev` | Amelia 💻 | React 19 / Vite dashboard implementation |
+| `backend-dev` | Marcus ⚙️ | Hermes-fork engine (FastAPI / Python) implementation |
+| `analyst` | Mary 📊 | Domain research & product briefs |
+| `researcher` | Ravi 🔬 | Technical research & code investigation |
+| `test-architect` | Murat 🧪 | Test design & automation |
+| `code-reviewer` | Quinn 🔎 | Adversarial code review (read-mostly) |
+
+### Pipeline & gates
+
+```
+Architect (Winston) ─orchestrates→ design → sprint → implement (story-by-story under review)
+   ↑ user approves design & sprint gates · ↑ unresolved questions go to the feature's qna.json
+```
+
+- **One phase per turn (step-gate).** Each turn writes its artifacts + `workspace.json` and halts at the gate.
+- **Design and sprint plans require explicit user approval.**
+- **Quality is the Architect's job** — every story's diff is reviewed (Winston + `code-reviewer` + `test-architect`)
+  before acceptance; findings logged under `reviews/{feature}/`.
+- **Safety rails:** hard-stop on red tests/build; **never `git commit`/`git push` or any irreversible/outward
+  action without explicit user approval**; the `code-reviewer` is read-mostly; no agent runs `git commit`.
+
+### Scripts (run from the dashboard or shell)
+
+- `scripts/build.sh` — dashboard build (`tsc -b && vite build`) + engine compile check
+- `scripts/run.sh` — `docker compose up -d --build` (dashboard :3737 · engine :8642); host bridge runs separately
+- `scripts/test.sh` — dashboard typecheck + engine pytest (falls back to compile check)

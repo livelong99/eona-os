@@ -4,6 +4,17 @@ Instructions for AI coding assistants and developers working on the hermes-agent
 
 **Never give up on the right solution.**
 
+## Ponytail — binding code standard
+
+Write **only what the task needs, and never cut validation, error handling, security,
+or accessibility** — the code is small because it's necessary, not golfed. Before
+writing, read the real code/flow, then climb the ladder and stop at the first rung
+that works: 1) does it need to exist? (skip) → 2) already in the codebase? (reuse) →
+3) stdlib? → 4) native platform feature? → 5) installed dependency? → 6) one line? →
+7) only then the minimum that works. Trust-boundary validation, data-loss handling,
+security, and accessibility are never on the chopping block. Full standard:
+`.agent-os/standards/ponytail.md`.
+
 ## What Hermes Is
 
 Hermes is a personal AI agent that runs the same agent core across a CLI, a
