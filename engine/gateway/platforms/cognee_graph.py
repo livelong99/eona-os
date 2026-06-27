@@ -147,12 +147,37 @@ def _node_description(node: Dict[str, Any]) -> str:
     return ""
 
 
-def _node_sources(node: Dict[str, Any]) -> List[str]:
-    srcs = node.get("sources")
-    if not isinstance(srcs, list):
+def _node_sources(node: Dict[str, Any]) -> List[Dict[str, str]]:
+    """Per-node source notes as the objects the frontend ``CogneeSource`` type
+    expects: ``{path?, title?, snippet}`` (a bare string would render as an empty
+    box). Tolerant of Cognee returning ``sources`` as bare path strings or as
+    dicts; falls back to a single ``source_path``/``source`` field. ``snippet`` is
+    always present (possibly ``""``) per the contract; ``path``/``title`` ride
+    along when known — pairing with the ``Source:`` provenance the ingest adds so
+    an entity traces back to its vault note."""
+    raw = node.get("sources")
+    if not isinstance(raw, list):
         one = node.get("source_path") or node.get("source")
-        srcs = [one] if one else []
-    return [str(s).strip() for s in srcs if s and str(s).strip()]
+        raw = [one] if one else []
+    out: List[Dict[str, str]] = []
+    for s in raw:
+        if isinstance(s, dict):
+            path = s.get("path") or s.get("source_path") or s.get("source") or s.get("id")
+            title = s.get("title") or s.get("name")
+            snippet = s.get("snippet") or s.get("text") or s.get("description") or ""
+        else:
+            path, title, snippet = s, None, ""
+        path = str(path).strip() if path else ""
+        snippet = str(snippet).strip()
+        if not path and not snippet and not title:
+            continue
+        item: Dict[str, str] = {"snippet": snippet}
+        if path:
+            item["path"] = path
+        if title:
+            item["title"] = str(title).strip()
+        out.append(item)
+    return out
 
 
 def _edge_fields(edge: Any) -> Tuple[Optional[str], Optional[str], str]:

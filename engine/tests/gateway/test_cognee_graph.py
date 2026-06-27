@@ -126,8 +126,10 @@ def test_sample_payload_maps_to_vault_graph_shape():
     assert n1["tags"] == ["Person"]
     assert n1["degree"] == 1                   # one relationship
     assert n1["snippet"] == "First programmer."
-    # Extras for the detail card ride along on the node.
-    assert n1["sources"] == ["20_Areas/people.md"]
+    # Extras for the detail card ride along on the node. Sources are OBJECTS
+    # ({path?, title?, snippet}) — the shape the frontend CogneeSource expects;
+    # a bare string source string would render as an empty box.
+    assert n1["sources"] == [{"path": "20_Areas/people.md", "snippet": ""}]
     assert n1["relations"] == [{"target": "Analytical Engine", "label": "designed"}]
 
     link = graph["links"][0]
@@ -138,6 +140,32 @@ def test_sample_payload_maps_to_vault_graph_shape():
     assert {p["id"] for p in graph["projects"]} == {"Person", "Concept"}
     for proj in graph["projects"]:
         assert set(proj) == {"id", "label", "color"}
+
+
+def test_sources_emit_objects_not_strings():
+    """Cognee sources map to {path?, title?, snippet} objects (frontend
+    CogneeSource), whether the payload carries bare strings or dicts."""
+    payload = {
+        "nodes": [{
+            "id": "e1", "name": "Ada", "type": "Person",
+            "sources": [
+                "20_Areas/people.md",  # bare string → {path, snippet:""}
+                {"path": "10_Projects/x/index.md", "title": "X Project",
+                 "snippet": "Ada worked on X."},  # dict → all three fields
+            ],
+        }],
+        "edges": [],
+    }
+    with _stub_urlopen(payload=payload):
+        graph = cognee_graph.build_graph(force=True)
+    sources = graph["nodes"][0]["sources"]
+    assert sources == [
+        {"path": "20_Areas/people.md", "snippet": ""},
+        {"path": "10_Projects/x/index.md", "title": "X Project", "snippet": "Ada worked on X."},
+    ]
+    # Every source is an object with a present (string) snippet — never a bare str.
+    for s in sources:
+        assert isinstance(s, dict) and isinstance(s["snippet"], str)
 
 
 def test_dangling_edge_is_dropped_and_degree_unaffected():
