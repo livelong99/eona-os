@@ -57,6 +57,18 @@ _QDRANT_COLLECTION = "agent_home_vault"
 _GEMINI_EMBED_MODEL = os.environ.get("EMBED_MODEL", "gemini-embedding-001")
 _EMBED_DIM = 768
 
+# Brain retrieval mode — gates which similarity lanes feed BrainResult.similar.
+# Env (HERMES_BRAIN_MODE) is the runtime source of truth; hermes/config.yaml's
+# brain.mode is the declarative default exported into this env at boot. Validated
+# at the boundary: an unset or unrecognized value falls back to "obsidian" so a
+# bad config can never break retrieval. BrainFact/BrainResult signatures are
+# unchanged — only lane selection changes.
+_VALID_BRAIN_MODES = ("obsidian", "cognee", "unified")
+
+# Cognee graph-recall service — a derived, rebuildable, fail-open REST index over
+# the read-only vault. Never the source of truth. Override with COGNEE_URL.
+_COGNEE_URL = os.environ.get("COGNEE_URL", "http://127.0.0.1:8765").rstrip("/")
+
 # Namespace → vault-relative directory for append writes
 _NAMESPACE_DIRS: Dict[str, str] = {
     "reasoningbank":   "20_Areas/agent-os/brain/reasoningbank",
@@ -92,6 +104,17 @@ class BrainResult:
 # ---------------------------------------------------------------------------
 # Module-level helpers
 # ---------------------------------------------------------------------------
+
+def _brain_mode() -> str:
+    """Resolve the active retrieval mode from ``HERMES_BRAIN_MODE``.
+
+    Fail-safe boundary validation: returns ``"obsidian"`` when the env var is
+    unset or holds a value outside ``_VALID_BRAIN_MODES`` (case/whitespace
+    insensitive), so a garbage value can never break retrieval.
+    """
+    mode = (os.environ.get("HERMES_BRAIN_MODE") or "obsidian").strip().lower()
+    return mode if mode in _VALID_BRAIN_MODES else "obsidian"
+
 
 def _merge_dedupe(facts: List[BrainFact], k: int) -> List[BrainFact]:
     """Merge two similarity lanes, deduplicate by content, return top-k."""
@@ -161,6 +184,46 @@ def _qdrant_search(vector: List[float], k: int) -> List[Dict[str, Any]]:
     except Exception as exc:
         logger.debug("Brain: Qdrant search failed (non-fatal): %s", exc)
         return []
+
+
+def _cognee_recall(query: str, k: int) -> List[Dict[str, Any]]:
+    """POST a recall query to the Cognee REST service. Returns [] on any failure.
+
+    Mirrors ``_qdrant_search``'s fail-open shape exactly: Cognee is a derived,
+    rebuildable recall lane over the read-only vault — service down, unreachable,
+    timing out, returning non-200, malformed, or not-yet-ingested all degrade to
+    ``[]`` and never raise, so a turn is never blocked. A thin ``urllib`` HTTP
+    client — no SDK dependency is added to engine/pyproject.toml.
+    """
+    import urllib.request
+    import urllib.error
+
+    url = f"{_COGNEE_URL}/search"
+    body = {"query": query, "search_type": "GRAPH_COMPLETION", "top_k": k}
+    data = json.dumps(body).encode()
+    req = urllib.request.Request(
+        url, data=data, headers={"content-type": "application/json"}
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if getattr(resp, "status", 200) != 200:
+                return []
+            result = json.loads(resp.read().decode())
+    except Exception as exc:
+        logger.debug("Brain: Cognee recall failed (non-fatal): %s", exc)
+        return []
+
+    # Cognee REST may return a bare list or a {results|data|hits: [...]} envelope.
+    if isinstance(result, dict):
+        hits = (
+            result.get("results")
+            or result.get("data")
+            or result.get("hits")
+            or []
+        )
+    else:
+        hits = result
+    return hits if isinstance(hits, list) else []
 
 
 # ---------------------------------------------------------------------------
@@ -289,6 +352,29 @@ class Brain:
             )
             for hit in hits
             if hit.get("payload", {}).get("preview")
+        ]
+
+    def _similar_via_cognee(self, query: str, *, k: int) -> List[BrainFact]:
+        """Cognee graph ``recall`` similarity lane. Returns [] on any failure.
+
+        Cognee is a derived index built FROM the read-only vault, so hits stay
+        ``provenance="vault"``. Fail-open like ``_similar_via_qdrant``: a down,
+        unreachable, or un-ingested Cognee yields ``[]`` and never blocks a turn.
+        """
+        hits = _cognee_recall(query, k)
+        return [
+            BrainFact(
+                content=hit.get("text") or hit.get("description") or "",
+                score=float(hit.get("score", 0.0) or 0.0),
+                provenance="vault",
+                source=hit.get("source_path") or hit.get("entity"),
+                metadata={
+                    "cognee_entity": hit.get("entity"),
+                    "relations": hit.get("relations", []),
+                },
+            )
+            for hit in hits
+            if isinstance(hit, dict) and (hit.get("text") or hit.get("description"))
         ]
 
     def _timewalk_to_facts(
@@ -421,12 +507,19 @@ class Brain:
         All retrieved context MUST be injected as USER messages by the caller —
         never into the system prompt (cache discipline §5.4).
         """
-        # Lane 1: similarity (holographic + Qdrant fused)
-        holographic_hits = self._similar_via_holographic(
-            query, k=k, min_trust=min_trust
-        )
-        qdrant_hits = self._similar_via_qdrant(query, k=k)
-        similar = _merge_dedupe(holographic_hits + qdrant_hits, k=k)
+        # Lane 1: similarity — gated by brain mode, fused through the existing
+        # _merge_dedupe. obsidian (default) = holographic + Qdrant, byte-for-byte
+        # as before; cognee = Cognee lane only; unified = all three fused.
+        mode = _brain_mode()
+        similar_parts: List[BrainFact] = []
+        if mode in ("obsidian", "unified"):
+            similar_parts += self._similar_via_holographic(
+                query, k=k, min_trust=min_trust
+            )
+            similar_parts += self._similar_via_qdrant(query, k=k)
+        if mode in ("cognee", "unified"):
+            similar_parts += self._similar_via_cognee(query, k=k)
+        similar = _merge_dedupe(similar_parts, k=k)
 
         # Lane 2: temporal time-walk
         temporal = self._timewalk_to_facts(query, as_of=as_of, k=k)

@@ -34,6 +34,18 @@ memory:
   user_profile_enabled: true
   memory_char_limit: 1300
 
+# --- Brain: retrieval mode (dual-brain) ---------------------------------------
+# Which similarity lanes feed Brain.similar retrieval. The runtime source of
+# truth is the HERMES_BRAIN_MODE env var (set on the hermes service); this key
+# is the declarative default. Precedence: HERMES_BRAIN_MODE env > brain.mode
+# > "obsidian". An unset/unrecognized value falls back to "obsidian", so the
+# default stack behaves exactly as before the Cognee dual-brain change.
+#   obsidian : holographic + Qdrant lanes over the vault (default, unchanged)
+#   cognee   : Cognee graph-recall lane only (requires the `cognee` profile)
+#   unified  : all lanes fused via the existing dedupe
+brain:
+  mode: obsidian
+
 # --- Curator (autonomous skill lifecycle) -------------------------------------
 # Periodically reviews agent-created skills: consolidates overlaps, builds
 # umbrella skills, and archives stale ones. The gateway daemon calls
