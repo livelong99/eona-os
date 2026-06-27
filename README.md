@@ -161,6 +161,7 @@ Secrets and runtime config live in **`~/.hermes/`** (seeded by `install.sh`, nev
 | `API_SERVER_KEY` | Bearer token for the engine API on `:8642` | auto-generated |
 | `CLAUDE_BRIDGE_TOKEN` | Shared token for the local delegation bridge | auto-generated |
 | `MCP_OBSIDIAN_API_KEY` | Obsidian Local REST API token (optional) | Obsidian plugin |
+| `COGNEE_LLM_API_KEY` | LLM key for Cognee's `cognify` graph extraction (per-document cost). **Only needed when the `cognee` profile is enabled** — see the dual-brain ingest below | your LLM provider |
 
 ### Ports (all `127.0.0.1`)
 
@@ -172,7 +173,31 @@ Secrets and runtime config live in **`~/.hermes/`** (seeded by `install.sh`, nev
 | `8080` | SearXNG web search | internal |
 | `11235` | Crawl4AI scrape/extract | internal |
 | `6533` | Qdrant vector memory (`→ 6333` in-container) | internal |
+| `8801` | Cognee graph brain (`→ 8000` in-container) — `cognee` profile only | internal |
 | `27123` | Obsidian Local REST API (optional) | host-only |
+
+### Cognee dual-brain (optional, default-off)
+
+The graph brain is a separate, **default-off** compose service. It builds a
+derived, rebuildable knowledge graph **from** the read-only vault — the vault
+stays the source of truth, and the recall lane is fail-open (engine serves fine
+when Cognee is down). Enable it explicitly:
+
+```bash
+# 1. Add the cognify LLM key to ~/.hermes/.env  (only needed for this profile)
+echo 'COGNEE_LLM_API_KEY=sk-…' >> ~/.hermes/.env
+
+# 2. Start the cognee service (off in a plain `docker compose up`)
+docker compose --profile cognee up -d cognee
+
+# 3. Ingest the vault → Cognee (one-time / periodic batch, NOT per-turn)
+python3 scripts/ingest-vault-cognee.py
+python3 scripts/ingest-vault-cognee.py --query "how does routing work?"   # smoke-test
+```
+
+Then set `HERMES_BRAIN_MODE` (`obsidian` · `cognee` · `unified`, default
+`obsidian`) to choose the recall brain. Unset / `obsidian` + no profile =
+exactly the pre-change behavior.
 
 Non-secret config (agent profiles, tool settings, bundled skills) lives in [`hermes/`](hermes/) and is copied to `~/.hermes/` on install.
 
