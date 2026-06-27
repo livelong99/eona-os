@@ -31,6 +31,13 @@ services:
       - SEARXNG_URL=http://searxng:8080
       - CRAWL4AI_URL=http://crawl4ai:11235
       - QDRANT_URL=http://qdrant:6333
+      # Cognee dual-brain (the cognee service below is default-OFF). COGNEE_URL
+      # points the fail-open recall lane + /v1/memory/cognee/graph at the
+      # in-network cognee service. HERMES_BRAIN_MODE selects the recall brain:
+      # obsidian (default — pre-change behavior) | cognee | unified. Reversible:
+      # unset/obsidian + no cognee profile = exactly as before this change.
+      - COGNEE_URL=http://cognee:8000
+      - HERMES_BRAIN_MODE=${HERMES_BRAIN_MODE:-obsidian}
       - CLAUDE_BRIDGE_URL=http://host.docker.internal:8765 # host-side Claude Code bridge
       # Tool manifests (os.pathsep-separated): built-in skills (read-only) + user-built
       # tools written by the Labs "UI Agent Builder" into the read-write ~/.hermes mount.
@@ -162,6 +169,45 @@ services:
       start_period: 30s
       retries: 3
 
+  cognee: # graph "brain" over the vault (entities + typed relations) — default-OFF.
+    # Fully-local stack: SQLite (relational) + LanceDB (vectors) + KuzuDB (graph).
+    # A derived, rebuildable index built FROM the read-only vault — never the
+    # source of truth (mirrors qdrant). Opt-in ONLY via `--profile cognee`
+    # (or COMPOSE_PROFILES=cognee); a plain `docker compose up` never starts it.
+    # NB: hermes has NO `depends_on: cognee` — the Cognee recall lane + graph
+    # endpoint are fail-open, so hermes starts and serves fine when cognee is down.
+    image: cognee/cognee:latest # verify/pin after first pull (same convention as qdrant)
+    container_name: agenthome-cognee
+    restart: unless-stopped
+    profiles: ["cognee"] # OFF by default — only starts when the cognee profile is enabled
+    env_file:
+      - path: ${HOME}/.hermes/.env # optional extra cognify settings (e.g. LLM_MODEL/LLM_PROVIDER)
+        required: false
+    environment:
+      - VECTOR_DB_PROVIDER=lancedb # local vectors
+      - GRAPH_DATABASE_PROVIDER=kuzu # local graph
+      - DB_PROVIDER=sqlite # local relational
+      # cognify/extraction LLM — the per-document token cost. Keyed from ~/.hermes/.env
+      # via the same compose-interpolation idiom as TWENTYFIRST_API_KEY on hermes.
+      - LLM_API_KEY=${COGNEE_LLM_API_KEY:-}
+    volumes:
+      - cognee_data:/cognee/.data # local stores (sqlite + lancedb + kuzu)
+      # Obsidian vault (read-only) — the ingest source. NEVER written back to.
+      - "${VAULT_DIR:-${HOME}/Documents/Obsidian/Vault}:/vault:ro"
+    ports:
+      # Host publish on 8801 to avoid clashing with common local :8000 dev servers
+      # (mirrors qdrant dodging 6333). The in-network service is still cognee:8000.
+      - "127.0.0.1:8801:8000"
+    healthcheck:
+      # cognee image ships bash but no guaranteed curl — probe the REST port (8000)
+      # with a bash /dev/tcp connect, the same idiom as qdrant. Longer start_period
+      # because first boot initializes the local sqlite/lancedb/kuzu stores.
+      test: ["CMD-SHELL", "bash -c '(echo > /dev/tcp/localhost/8000)' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
+
   dashboard: # Vite SPA mission control (static build served by nginx)
     build: ./dashboard
     container_name: agenthome-dashboard
@@ -190,3 +236,4 @@ services:
 
 volumes:
   qdrant_data:
+  cognee_data:
