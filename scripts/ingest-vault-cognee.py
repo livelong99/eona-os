@@ -116,8 +116,16 @@ def scan_notes() -> list[Path]:
 
 def add_note(rel_path: str, text: str) -> None:
     """Send one note to Cognee's ``/add`` (the "remember" step). Cognee is
-    content-addressed, so re-adding an unchanged note is a no-op (idempotent-ish)."""
-    _post("/add", {"data": text, "dataset_name": DATASET})
+    content-addressed, so re-adding an unchanged note is a no-op (idempotent-ish).
+
+    A ``Source: <vault-path>`` line is prepended so the document's vault origin
+    survives into cognify and the extracted entities inherit a traceable source.
+    That provenance is what the cross-brain bridge maps on — Part 2's per-node
+    ``sources[]``, the search "resolve a cognee fact → its vault node", and the
+    frontend Cognee node detail all depend on it (without it every cognee hit
+    stays an unresolved ``cognee:<entity>``)."""
+    body = f"Source: {rel_path}\n\n{text}"
+    _post("/add", {"data": body, "dataset_name": DATASET})
 
 
 def cognify() -> None:
