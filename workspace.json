@@ -1,0 +1,174 @@
+{
+  "name": "Agent Home",
+  "slug": "agent-home",
+  "path": "/vault/10_Projects/agent-home",
+  "source": {
+    "type": "folder",
+    "ref": "/vault/10_Projects/agent-home"
+  },
+  "phase": "ready",
+  "mode": "manual",
+  "team": [
+    {
+      "id": "architect",
+      "name": "Winston",
+      "role": "System Architect",
+      "file": ".agent-os/agents/architect/"
+    },
+    {
+      "id": "pm",
+      "name": "John",
+      "role": "Product Manager",
+      "file": ".agent-os/agents/pm/"
+    },
+    {
+      "id": "ux-designer",
+      "name": "Sally",
+      "role": "UX Designer",
+      "file": ".agent-os/agents/ux-designer/"
+    },
+    {
+      "id": "frontend-dev",
+      "name": "Amelia",
+      "role": "Frontend Engineer",
+      "file": ".agent-os/agents/frontend-dev/"
+    },
+    {
+      "id": "backend-dev",
+      "name": "Marcus",
+      "role": "Backend Engineer",
+      "file": ".agent-os/agents/backend-dev/"
+    },
+    {
+      "id": "analyst",
+      "name": "Mary",
+      "role": "Business Analyst",
+      "file": ".agent-os/agents/analyst/"
+    },
+    {
+      "id": "researcher",
+      "name": "Ravi",
+      "role": "Research Specialist",
+      "file": ".agent-os/agents/researcher/"
+    },
+    {
+      "id": "test-architect",
+      "name": "Murat",
+      "role": "Test Architect",
+      "file": ".agent-os/agents/test-architect/"
+    },
+    {
+      "id": "code-reviewer",
+      "name": "Quinn",
+      "role": "Code Reviewer",
+      "file": ".agent-os/agents/code-reviewer/"
+    }
+  ],
+  "scripts": {
+    "build": "scripts/build.sh",
+    "run": "scripts/run.sh",
+    "test": "scripts/test.sh"
+  },
+  "active_feature": "cognee-dual-brain",
+  "features": [
+    {
+      "slug": "cognee-dual-brain",
+      "title": "Dual-Brain Memory",
+      "description": "Switchable Obsidian / Cognee / unified brain with a fail-open Cognee recall lane, the /v1/memory/cognee/graph endpoint, a default-off local Cognee service (Nemotron + fastembed), and a dashboard dual-brain Memory view.",
+      "phase": "done",
+      "change_dir": "openspec/changes/cognee-dual-brain",
+      "summary": "Delivered. Switchable Obsidian / Cognee / unified brain with a fail-open Cognee recall lane, the /v1/memory/cognee/graph endpoint, a default-off local Cognee service (Nemotron + fastembed), and a dashboard dual-brain Memory view.",
+      "created": 1782588220
+    },
+    {
+      "slug": "flow-director",
+      "title": "Flow Cinematography Director",
+      "description": "Multi-agent swarm that turns a one-line brief into Flow-ready video prompts across 7 modes, with reference-image analysis, a creativity engine, auto mode, and a dedicated run screen.",
+      "phase": "done",
+      "summary": "Delivered. Multi-agent swarm that turns a one-line brief into Flow-ready video prompts across 7 modes, with reference-image analysis, a creativity engine, auto mode, and a dedicated run screen.",
+      "created": 1782588220
+    },
+    {
+      "slug": "brand-maker",
+      "title": "Brand Maker (Forge)",
+      "description": "Mockup-first brand identity tool — anti-cliché logo + app-icon suite + campaign video, delivered as model-tuned Google Flow prompt packets; can base a brand on an existing workspace.",
+      "phase": "done",
+      "summary": "Delivered. Mockup-first brand identity tool — anti-cliché logo + app-icon suite + campaign video, delivered as model-tuned Google Flow prompt packets; can base a brand on an existing workspace.",
+      "created": 1782588220
+    },
+    {
+      "slug": "brainstorm",
+      "title": "Brainstorm",
+      "description": "Multi-agent ideation swarm with a glass-box execution view and QnA gates that converges a spark into a PRD, with a chat to revise the PRD after it's generated.",
+      "phase": "done",
+      "summary": "Delivered. Multi-agent ideation swarm with a glass-box execution view and QnA gates that converges a spark into a PRD, with a chat to revise the PRD after it's generated.",
+      "created": 1782588220
+    },
+    {
+      "slug": "workspace",
+      "title": "Workspace (SDLC Pipeline)",
+      "description": "Design → sprint → implement pipeline driven by the 9-agent Eona OS team with approval gates, story-by-story review, lossless live-run reconnect, and a git panel.",
+      "phase": "done",
+      "summary": "Delivered. Design → sprint → implement pipeline driven by the 9-agent Eona OS team with approval gates, story-by-story review, lossless live-run reconnect, and a git panel.",
+      "created": 1782588220
+    },
+    {
+      "slug": "tools-platform",
+      "title": "Tools / Labs Platform",
+      "description": "Manifest-driven tool gallery + Workbench with a shared glass-box swarm run kit (agent lanes, QnA, staged artifact renderers) for any swarm:true tool.",
+      "phase": "done",
+      "summary": "Delivered. Manifest-driven tool gallery + Workbench with a shared glass-box swarm run kit (agent lanes, QnA, staged artifact renderers) for any swarm:true tool.",
+      "created": 1782588220
+    },
+    {
+      "slug": "memory-intelligence",
+      "title": "Memory / Intelligence",
+      "description": "Vault knowledge-graph brain — a 3D Memory sphere over the Obsidian vault (nodes/links/soft-links/projects) plus fused semantic search.",
+      "phase": "done",
+      "summary": "Delivered. Vault knowledge-graph brain — a 3D Memory sphere over the Obsidian vault (nodes/links/soft-links/projects) plus fused semantic search.",
+      "created": 1782588220
+    },
+    {
+      "slug": "voice-jarvis",
+      "title": "Voice (Jarvis)",
+      "description": "Local voice front-end with Edge TTS en-US-EmmaMultilingualNeural and low-latency first-clause audio, routing capture/task/query intents into the vault.",
+      "phase": "done",
+      "summary": "Delivered. Local voice front-end with Edge TTS en-US-EmmaMultilingualNeural and low-latency first-clause audio, routing capture/task/query intents into the vault.",
+      "created": 1782588220
+    },
+    {
+      "slug": "git-panel",
+      "title": "Git Panel",
+      "description": "Branch, commit history, and manual push scoped to the workspace folder, with git-init for non-repo workspaces.",
+      "phase": "done",
+      "summary": "Delivered. Branch, commit history, and manual push scoped to the workspace folder, with git-init for non-repo workspaces.",
+      "created": 1782588220
+    },
+    {
+      "slug": "dark-glass-ui",
+      "title": "Dark-Glass UI + Dock",
+      "description": "Spatial/cinematic dark liquid-glass design system, top dock navigation with custom square icons, full-width responsive screens, and the ⌘K command bridge.",
+      "phase": "done",
+      "summary": "Delivered. Spatial/cinematic dark liquid-glass design system, top dock navigation with custom square icons, full-width responsive screens, and the ⌘K command bridge.",
+      "created": 1782588220
+    },
+    {
+      "slug": "live-dashboard",
+      "title": "Live Dashboard ↔ Engine",
+      "description": "Vite React 19 SPA replacing the Next.js UI, wired to the live engine APIs (runs, transcripts, persona/model hooks, healthchecks, fail-fast auth).",
+      "phase": "done",
+      "summary": "Delivered. Vite React 19 SPA replacing the Next.",
+      "created": 1782588220
+    },
+    {
+      "slug": "eona-os",
+      "title": "Eona OS",
+      "description": "Agent Home → Eona OS rebrand across the dashboard and engine, with the ponytail code standard bound into every agent.",
+      "phase": "done",
+      "summary": "Delivered. Agent Home → Eona OS rebrand across the dashboard and engine, with the ponytail code standard bound into every agent.",
+      "created": 1782588220
+    }
+  ],
+  "summary": "Eona OS — 12 delivered features. Team provisioned (9 agents); Ruflo swarm + build/run/test scripts ready. Latest: Dual-Brain Memory (Cognee + Obsidian) live and default-off.",
+  "updated": 1782588220
+}

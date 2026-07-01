@@ -132,7 +132,13 @@ export function NewWorkspaceModal({ onClose, onCreate, onOpenWorkspace }: Props)
           )}
           {tab === "github" && (
             <Field label="Public GitHub repo URL" htmlFor="ws-github">
-              <input id="ws-github" value={github} onChange={(e) => setGithub(e.target.value)}
+              <input id="ws-github" value={github}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setGithub(v);
+                  // Mirror the folder tab: derive a name from the repo if none typed yet.
+                  if (v.trim() && !name.trim()) setName(titleizeBasename(v.replace(/\.git$/i, "")));
+                }}
                 placeholder="https://github.com/owner/repo"
                 className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3.5 py-2.5 font-mono text-[13px] text-white outline-none transition-colors placeholder:text-white/35 focus:border-white/25 focus:bg-white/[0.07]" />
             </Field>
@@ -169,6 +175,9 @@ export function NewWorkspaceModal({ onClose, onCreate, onOpenWorkspace }: Props)
         </div>
 
         <div className="flex shrink-0 items-center justify-end gap-3 border-t border-white/10 px-6 py-4">
+          {!name.trim() && (
+            <p className="mr-auto text-[11.5px] text-white/40">Add a workspace name to continue.</p>
+          )}
           <button type="button" onClick={onClose}
             className="rounded-lg px-4 py-2 text-[13px] font-medium text-white/60 transition-colors hover:text-white/90 cursor-pointer">
             Cancel

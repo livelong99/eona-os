@@ -99,6 +99,24 @@ A single high-quality modern application icon at the polish of Chrome / Safari /
 
 ---
 
+# Labs tool icons (same family, same workflow)
+
+Two **Labs tool** icons in the identical app-icon finish — for the tool tiles, not the
+dock. Generate them exactly like `02–08`: reference `01 · Home` as the strict style
+key-frame, same pinned seed, light pastel background, glyph ~90–95%, no tile/border/frame.
+
+## 09 · Brand Maker (Forge) — Molten mark crystallizing (NOT a palette/brush/wand)
+
+A single high-quality modern application icon at the polish of Chrome / Safari / Docker — dimensional, glossy, richly detailed with smooth gradients, soft volume, clean highlights and gentle shading. A soft light blush #FBEAEF background fills the entire square to all four edges. Centered and large, covering ~92% of the canvas: a single brand emblem caught mid-forge — its lower half still molten, a glossy liquid-chrome teardrop of flowing color graduating from warm amber #FFB02E through magenta #FF5FA2 with a bright reflective sheen; its upper half snapping into crisp solid facets of violet #7C5CFF-to-#5B3FD6, each facet with a clean beveled edge, a sharp specular highlight and soft ambient occlusion in the recesses for real depth — raw color crystallizing into a finished identity. A brilliant four-point forge-spark with a warm soft bloom flares where the molten color meets the crystallized facets, with a couple of small ember-ticks for character. Smooth rich gradients, soft depth, crisp detail. No tile, no border, no frame. 1:1 square canvas, output at 4K. No text, no letters, no UI elements.
+
+---
+
+## 10 · Flow Director (Lumière) — Aperture iris with a cinematic flare (NOT a clapperboard/reel/camera)
+
+A single high-quality modern application icon at the polish of Chrome / Safari / Docker — dimensional, glossy, richly detailed with smooth gradients, soft volume, clean highlights and gentle shading. A soft light slate-blue #E9EEF6 background fills the entire square to all four edges. Centered and large, covering ~92% of the canvas: a dimensional camera aperture iris — six overlapping glossy curved blades spiralling inward to form one clean central opening, each blade a smooth solid plane graduating from teal #14C8A0 to deep blue #1E4FCC with a crisp highlight along its leading edge and soft shading where the blades overlap for true layered depth. Bursting through the central opening, a brilliant warm cinematic light-flare graduating from amber #FF8A3D to a white-hot core, throwing a single clean anamorphic streak of light across the iris and a soft lens-bloom — a teal-and-orange frame of directed light. Smooth rich gradients, soft depth, crisp detail. No tile, no border, no frame. 1:1 square canvas, output at 4K. No text, no letters, no UI elements.
+
+---
+
 ## Cliché bans applied (concepts unchanged; rendering is dimensional app-icon quality)
 
 | Page | Median cliché (banned) | Mark |
@@ -111,6 +129,8 @@ A single high-quality modern application icon at the polish of Chrome / Safari /
 | Control | gear / sliders / needle | layered orbital dials + amber marker |
 | Integrations | puzzle piece / plug | glossy hub, conduits merging into one node |
 | Planner | calendar grid / clock | forward time-ribbon with a checkmark on its crest |
+| Brand Maker | palette / brush / magic wand | molten color crystallizing into a faceted mark + forge-spark |
+| Flow Director | clapperboard / film reel / camera | dimensional aperture iris with a teal-orange cinematic flare |
 
 ## Notes
 - **Match the orb.** The aurora orb is the quality bar: smooth rich gradients, soft glossy volume, clean

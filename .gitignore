@@ -9,6 +9,7 @@ hermes/.env
 .agent/
 _bmad/
 _bmad-output/
+.agent-os/
 .claude-flow/
 .swarm/
 ruvector.db
