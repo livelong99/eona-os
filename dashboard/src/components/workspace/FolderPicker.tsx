@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Folder, CornerLeftUp, Loader, Check, HardDrive, ChevronRight } from "lucide-react";
+import { Folder, CornerLeftUp, Loader, Check, HardDrive, ChevronRight, Keyboard } from "lucide-react";
 import { browseFolders, type FolderListing } from "@/lib/workspace/workspaceClient";
 
 interface Props {
@@ -7,18 +7,21 @@ interface Props {
   onChange: (path: string) => void;
 }
 
-// FolderPicker — a Finder-like folder browser scoped to the engine-visible vault.
-// Click a folder row to SELECT it (sets the value); use the chevron to drill in.
-// The chosen path is always engine-readable so the copy-into-10_Projects works.
+// FolderPicker — a Finder-like folder browser scoped to the engine-visible
+// workspaces/vault root(s). Click a folder row to SELECT it (sets the value);
+// use the chevron to drill in. A manual-path fallback covers folders the picker
+// can't reach (no Obsidian vault mounted yet, or a path outside every configured
+// root) — the engine's containment check is still the only gate on submission.
 export function FolderPicker({ value, onChange }: Props) {
   const [listing, setListing] = useState<FolderListing | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [manual, setManual] = useState(false);
 
-  const open = (path?: string) => {
+  const open = (path?: string, root?: string) => {
     setLoading(true);
     setError(null);
-    browseFolders(path)
+    browseFolders(path, root)
       .then(setListing)
       .catch((e) => setError(e instanceof Error ? e.message : "browse failed"))
       .finally(() => setLoading(false));
@@ -32,9 +35,56 @@ export function FolderPicker({ value, onChange }: Props) {
 
   const atRoot = !listing?.parent;
   const short = (p: string) => p.replace(listing?.root ?? "", "") || "/";
+  const roots = listing?.roots ?? [];
+
+  if (manual) {
+    return (
+      <div className="overflow-hidden rounded-lg border border-white/10 bg-white/[0.03]">
+        <div className="p-3">
+          <input
+            autoFocus
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder="/absolute/path/to/project"
+            className="w-full rounded-lg border border-white/10 bg-white/[0.04] px-3.5 py-2.5 font-mono text-[13px] text-white outline-none transition-colors placeholder:text-white/35 focus:border-white/25 focus:bg-white/[0.07]"
+          />
+          <p className="mt-1.5 text-[11.5px] text-white/35">
+            Must be inside a configured root — the create step reports a clear error otherwise.
+          </p>
+        </div>
+        <div className="flex items-center justify-between border-t border-white/[0.08] px-3 py-2">
+          <span className="text-[12px] text-white/40">Typed path</span>
+          <button
+            type="button"
+            onClick={() => setManual(false)}
+            className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-[#a78bfa] transition-colors hover:bg-white/10 cursor-pointer"
+          >
+            <Folder className="h-3.5 w-3.5" /> Browse instead
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="overflow-hidden rounded-lg border border-white/10 bg-white/[0.03]">
+      {/* root switcher — only rendered when more than one root is configured */}
+      {roots.length > 1 && (
+        <div className="flex gap-1 border-b border-white/[0.08] bg-white/[0.02] p-1.5">
+          {roots.map((r) => (
+            <button
+              key={r.path}
+              type="button"
+              onClick={() => open(r.path, r.path)}
+              className={`rounded-md px-2.5 py-1 text-[11.5px] font-medium transition-colors cursor-pointer ${
+                listing?.root === r.path ? "bg-white/10 text-white" : "text-white/50 hover:text-white/80"
+              }`}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+      )}
       {/* path bar */}
       <div className="flex items-center gap-2 border-b border-white/[0.08] px-3 py-2">
         <button
@@ -102,9 +152,38 @@ export function FolderPicker({ value, onChange }: Props) {
             </span>
           </>
         ) : (
-          <span className="text-[12px] text-white/40">Click a folder to select it · chevron to open.</span>
+          <span className="min-w-0 flex-1 truncate text-[12px] text-white/40">
+            Click a folder to select it · chevron to open.
+          </span>
         )}
+        <button
+          type="button"
+          onClick={() => setManual(true)}
+          title="Type a path instead — useful if the folder isn't reachable here (e.g. no Obsidian vault mounted)"
+          className="flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[12px] font-medium text-white/50 transition-colors hover:bg-white/10 hover:text-white/80 cursor-pointer"
+        >
+          <Keyboard className="h-3.5 w-3.5" /> Type a path
+        </button>
       </div>
+
+      {/* effective destination — names the ACTUAL configured root, not a hardcoded path */}
+      {listing?.root && (
+        <p
+          className="truncate border-t border-white/[0.08] px-3 py-1.5 text-[11px] text-white/35"
+          title={listing.root}
+        >
+          Copied into the configured {rootLabel(roots, listing.root)} folder ({listing.root}).
+        </p>
+      )}
     </div>
   );
+}
+
+// The active root's configured label (e.g. "Workspaces"/"Vault"), falling back
+// to its basename when the engine hasn't reported `roots` yet (older build).
+function rootLabel(roots: { path: string; label: string }[], root: string): string {
+  const match = roots.find((r) => r.path === root);
+  if (match) return match.label;
+  const base = root.replace(/\/+$/, "").split("/").pop();
+  return base || "workspaces";
 }

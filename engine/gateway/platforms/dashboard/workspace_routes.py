@@ -26,6 +26,23 @@ logger = logging.getLogger(__name__)
 _GIT_UNIT = "\x1f"  # field separator for git log --pretty
 
 
+def _root_label(root: Path) -> str:
+    """Human label for a configured browse root, for the dashboard's root switcher."""
+    try:
+        if root == _ad._collection_root_for("workspace").resolve():
+            return "Workspaces"
+    except Exception:
+        pass
+    vault_env = os.environ.get("HERMES_VAULT_PATH")
+    if vault_env:
+        try:
+            if root == Path(vault_env).resolve():
+                return "Vault"
+        except Exception:
+            pass
+    return root.name or str(root)
+
+
 def _git_status_sync(ws: Path) -> Dict[str, Any]:
     """Read-only git snapshot of a workspace folder (blocking; via executor)."""
     import subprocess
@@ -440,25 +457,45 @@ def register(app: "Any", adapter: "Any") -> None:
         return resp
 
     # ------------------------------------------------------------------
-    # GET /v1/tools/workspace/browse?path=… — list sub-folders for the "local
-    # folder" picker. Scoped to the browsable root (the mounted vault) so the
-    # selected path is one the engine can actually copy from; traversal above
-    # the root is rejected and symlinks/heavy build dirs are skipped.
+    # GET /v1/tools/workspace/browse?path=…&root=… — list sub-folders for the
+    # "local folder" picker. Scoped to one of the configured browse roots (the
+    # workspaces root and/or the mounted vault) so the selected path is one the
+    # engine can actually copy from; traversal above every configured root is
+    # rejected and symlinks/heavy build dirs are skipped. `root` optionally picks
+    # which configured root to browse from (defaults to the first); the response
+    # always lists every configured root under `roots` so the UI can offer a
+    # switcher only when there's more than one.
     # ------------------------------------------------------------------
     async def _workspace_browse(request: "web.Request") -> "web.Response":
         if (auth := adapter._check_auth(request)) is not None:
             return auth
-        root = _ad._browse_root().resolve()
-        raw = request.query.get("path") or str(root)
+        roots = [r.resolve() for r in _ad._browse_roots()]
+        if not roots:
+            return web.json_response({"error": "no_browse_root", "detail": "no browse root configured"}, status=500)
+
+        default_root = roots[0]
+        requested = request.query.get("root")
+        if requested:
+            try:
+                req_resolved = Path(requested).resolve()
+                default_root = next((r for r in roots if r == req_resolved), default_root)
+            except Exception:
+                pass
+
+        raw = request.query.get("path") or str(default_root)
         try:
             target = Path(raw).resolve()
         except Exception:
-            target = root
-        # Containment: never escape the browse root.
-        if not (target == root or target.is_relative_to(root)):
-            target = root
+            target = default_root
+
+        # Containment: never escape any configured root; clamp to the requested
+        # (or default) root if the resolved target isn't under one of them.
+        active_root = next((r for r in roots if target == r or target.is_relative_to(r)), None)
+        if active_root is None:
+            target = default_root
+            active_root = default_root
         if not target.is_dir():
-            target = root
+            target = active_root
 
         def _list() -> List[Dict[str, str]]:
             out: List[Dict[str, str]] = []
@@ -476,10 +513,11 @@ def register(app: "Any", adapter: "Any") -> None:
 
         entries = await asyncio.get_running_loop().run_in_executor(None, _list)
         return web.json_response({
-            "root": str(root),
+            "root": str(active_root),
             "path": str(target),
-            "parent": (str(target.parent) if target != root else None),
+            "parent": (str(target.parent) if target != active_root else None),
             "entries": entries,
+            "roots": [{"path": str(r), "label": _root_label(r)} for r in roots],
         })
 
     # POST /v1/tools/workspace/exec/stop — kill a running build/run/test script.

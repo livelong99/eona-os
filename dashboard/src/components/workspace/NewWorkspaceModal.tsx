@@ -125,9 +125,6 @@ export function NewWorkspaceModal({ onClose, onCreate, onOpenWorkspace }: Props)
                   if (p && !name.trim()) setName(titleizeBasename(p));
                 }}
               />
-              <p className="mt-1.5 text-[11.5px] text-white/35">
-                Click a folder to select it (chevron to open). It's copied into 10_Projects.
-              </p>
             </Field>
           )}
           {tab === "github" && (

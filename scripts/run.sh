@@ -5,6 +5,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 echo "▶ Eona OS run"
 
+# Resolve the same VAULT_DIR/WORKSPACES_DIR compose reads from ./.env (if present)
+# and ensure both exist — a missing bind-mount source hard-fails `docker compose
+# up`, and a user running this directly (without scripts/install.sh first)
+# shouldn't hit that just because Obsidian was never opened.
+[ -f .env ] && { set -a; . ./.env; set +a; }
+VAULT_DIR="${VAULT_DIR:-${HOME}/Documents/Obsidian/Vault}"
+WORKSPACES_DIR="${WORKSPACES_DIR:-${VAULT_DIR}/10_Projects}"
+mkdir -p "${VAULT_DIR}" "${WORKSPACES_DIR}"
+
 if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
   if [ -f docker-compose.yml ]; then
     echo "▶ docker compose up -d --build"

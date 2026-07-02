@@ -54,9 +54,15 @@ services:
       # the /v1/tools/brainstorm/artifacts endpoints read them back.
       - HERMES_BRAINSTORM_ROOT=/vault/30_Resources/Brainstorms
       # Workspaces (the Architect-orchestrated SDLC pipeline) are cloned/copied into
-      # the vault's read-WRITE 10_Projects subtree (mounted below) so the project
-      # tree is Obsidian-visible and the workspace run operates on real files.
-      - HERMES_WORKSPACES_ROOT=/vault/10_Projects
+      # their OWN mount (below), independent of the vault — WORKSPACES_DIR defaults
+      # to ${VAULT_DIR}/10_Projects (today's layout) but can point anywhere on the
+      # host, and the stack works with no Obsidian vault at all (VAULT_DIR is only
+      # needed for the optional Memory/Brain features).
+      - HERMES_WORKSPACES_ROOT=/workspaces
+      # Roots the "Local folder" picker + folder-source ingest may read from
+      # (pathsep list, mirrors HERMES_TOOL_ROOTS). Default keeps BOTH the
+      # workspaces mount and the vault mount browsable/ingestable.
+      - HERMES_BROWSE_ROOTS=/workspaces:/vault
       # Optional: 21st.dev "magic" MCP for the frontend/UX agents (modern UI refs +
       # component generation). Off unless a key is provided; agents fall back to the
       # ui-ux-pro-max / frontend-design skills + web search. Set in your env/.env.
@@ -89,10 +95,12 @@ services:
       # land in the real vault. Matches the flow-director tool's artifacts_root.
       - "${VAULT_DIR:-${HOME}/Documents/Obsidian/Vault}/30_Resources/Flow:/vault/30_Resources/Flow:rw"
       # Workspaces: the SDLC pipeline clones/copies projects here and the agent team
-      # builds + tests against them, so 10_Projects must be read-WRITE in-container.
-      # Matches HERMES_WORKSPACES_ROOT. (agent-home itself lives here — the whole
-      # projects tree becomes writable to the engine.)
-      - "${VAULT_DIR:-${HOME}/Documents/Obsidian/Vault}/10_Projects:/vault/10_Projects:rw"
+      # builds + tests against them — its OWN read-WRITE mount, independent of the
+      # vault. Matches HERMES_WORKSPACES_ROOT. WORKSPACES_DIR defaults to
+      # ${VAULT_DIR}/10_Projects (today's exact host layout, unchanged unless you
+      # set WORKSPACES_DIR yourself, e.g. in the repo-root .env — see
+      # scripts/install.sh). (agent-home itself lives here today.)
+      - "${WORKSPACES_DIR:-${VAULT_DIR:-${HOME}/Documents/Obsidian/Vault}/10_Projects}:/workspaces:rw"
     ports:
       - "127.0.0.1:8642:8642" # OpenAI-compatible API + /health
     extra_hosts:

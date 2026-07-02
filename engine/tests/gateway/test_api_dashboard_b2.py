@@ -471,6 +471,46 @@ async def test_workspace_browse_lists_and_contains(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_workspace_browse_multi_root(tmp_path, monkeypatch):
+    """HERMES_BROWSE_ROOTS (pathsep list) exposes every configured root: the
+    response names them all under `roots`, defaults to the first, and `?root=`
+    switches which one is browsed — without allowing an escape to an
+    unconfigured path."""
+    import os as _os
+
+    workspaces = tmp_path / "10_Projects"
+    external = tmp_path / "external"
+    (workspaces).mkdir(parents=True)
+    (external / "some-app").mkdir(parents=True)
+    monkeypatch.setenv("HERMES_WORKSPACES_ROOT", str(workspaces))
+    monkeypatch.setenv("HERMES_BROWSE_ROOTS", f"{workspaces}{_os.pathsep}{external}")
+    monkeypatch.delenv("HERMES_BROWSE_ROOT", raising=False)
+
+    adapter = _make_adapter()
+    app = _create_dashboard_app(adapter)
+    async with TestClient(TestServer(app)) as client:
+        # default landing root is the FIRST configured root (workspaces); both
+        # configured roots are reported under `roots`.
+        default = await (await client.get("/v1/tools/workspace/browse")).json()
+        assert default["root"] == str(workspaces)
+        root_paths = [r["path"] for r in default["roots"]]
+        assert root_paths == [str(workspaces), str(external)]
+        assert any(r["label"] == "Workspaces" for r in default["roots"])
+
+        # ?root= switches the active root to the second configured entry.
+        switched = await (await client.get(
+            f"/v1/tools/workspace/browse?root={external}")).json()
+        assert switched["root"] == str(external)
+        assert [e["name"] for e in switched["entries"]] == ["some-app"]
+
+        # an unconfigured ?root= is ignored (falls back to the default root),
+        # not honored — the containment allow-list is still enforced.
+        bogus = await (await client.get(
+            f"/v1/tools/workspace/browse?root={tmp_path / 'not-configured'}")).json()
+        assert bogus["root"] == str(workspaces)
+
+
+@pytest.mark.asyncio
 async def test_workspace_create_already_onboarded(tmp_path, monkeypatch):
     """Picking a folder that is already a workspace returns 409 already_onboarded
     (with the slug) so the UI can offer to open it — no copy, no relaunch."""

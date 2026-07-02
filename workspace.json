@@ -69,8 +69,18 @@
     "run": "scripts/run.sh",
     "test": "scripts/test.sh"
   },
-  "active_feature": "cognee-dual-brain",
+  "active_feature": "custom-workspace-paths",
   "features": [
+    {
+      "slug": "custom-workspace-paths",
+      "title": "Custom Workspace Paths",
+      "description": "Decouple the workspaces root from the Obsidian vault root, persist both in a repo-root .env (Compose-native), make docker-compose/install.sh/run.sh path-configurable and vault-optional, and expose the configured root(s) + a manual-path fallback in the dashboard's Add Workspace modal.",
+      "phase": "done",
+      "change_dir": "openspec/changes/custom-workspace-paths",
+      "gates": { "design": "approved", "sprint": "skipped" },
+      "summary": "Delivered. Decoupled VAULT_DIR/WORKSPACES_DIR, persisted in a repo-root .env; docker-compose/install.sh/run.sh/doctor.sh made path-configurable and vault-optional; engine _browse_roots() multi-root support; Add Workspace exposes the configured root(s) + a manual-path fallback. Reviewed (reviews/custom-workspace-paths/review.md); dashboard typecheck+build and targeted engine pytest green; pre-existing unrelated test/collection failures confirmed via git-stash comparison.",
+      "created": 1783123200
+    },
     {
       "slug": "cognee-dual-brain",
       "title": "Dual-Brain Memory",
@@ -169,6 +179,6 @@
       "created": 1782588220
     }
   ],
-  "summary": "Eona OS — 12 delivered features. Team provisioned (9 agents); Ruflo swarm + build/run/test scripts ready. Latest: Dual-Brain Memory (Cognee + Obsidian) live and default-off.",
-  "updated": 1782588220
+  "summary": "Eona OS — 13 delivered features. Team provisioned (9 agents); Ruflo swarm + build/run/test scripts ready. Latest: Custom Workspace Paths — decoupled vault/workspaces roots, vault-optional deploy, multi-root Add Workspace picker.",
+  "updated": 1783123300
 }

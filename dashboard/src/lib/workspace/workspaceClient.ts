@@ -336,17 +336,31 @@ export interface FolderEntry {
   name: string;
   path: string;
 }
+export interface BrowseRoot {
+  path: string;
+  label: string;
+}
 export interface FolderListing {
   root: string;
   path: string;
   parent: string | null;
   entries: FolderEntry[];
+  /** Every configured browse root (engine `HERMES_BROWSE_ROOTS`). Usually a single
+   * entry — a root switcher only makes sense to show when there's more than one. */
+  roots?: BrowseRoot[];
 }
 
-/** List sub-folders of `path` (or the browse root) for the local-folder picker. */
-export async function browseFolders(path?: string, signal?: AbortSignal): Promise<FolderListing> {
-  const qs = path ? `?path=${encodeURIComponent(path)}` : "";
-  const res = await fetch(`${API_BASE}/v1/tools/${WORKSPACE_TOOL_ID}/browse${qs}`, {
+/**
+ * List sub-folders of `path` (or the browse root) for the local-folder picker.
+ * `root` optionally switches which configured root to browse from (see `roots`
+ * on the returned listing); omit to use the default/active root.
+ */
+export async function browseFolders(path?: string, root?: string, signal?: AbortSignal): Promise<FolderListing> {
+  const params = new URLSearchParams();
+  if (path) params.set("path", path);
+  if (root) params.set("root", root);
+  const qs = params.toString();
+  const res = await fetch(`${API_BASE}/v1/tools/${WORKSPACE_TOOL_ID}/browse${qs ? `?${qs}` : ""}`, {
     signal,
     cache: "no-store",
   });

@@ -684,11 +684,31 @@ _BROWSE_SKIP = {
 def _browse_root() -> Path:
     """Root the local-folder picker may browse. Defaults to the mounted vault (the
     parent of the workspaces root), so any picked folder is engine-readable. Override
-    with HERMES_BROWSE_ROOT."""
+    with HERMES_BROWSE_ROOT. Back-compat single-root accessor — prefer `_browse_roots()`."""
     env = os.environ.get("HERMES_BROWSE_ROOT")
     if env:
         return Path(env)
     return _collection_root_for("workspace").parent
+
+
+def _browse_roots() -> List[Path]:
+    """Roots the local-folder picker/ingest may read from, in priority order.
+    ``HERMES_BROWSE_ROOTS`` (pathsep-separated, mirrors ``HERMES_TOOL_ROOTS``) takes
+    precedence; falls back to the single-path ``HERMES_BROWSE_ROOT``; falls back to
+    ``[workspaces_root, workspaces_root.parent]`` so an unconfigured deploy behaves
+    exactly as ``_browse_root()`` did before multi-root support (the workspaces root
+    itself is always browsable/ingestable even when it's mounted independently of
+    the vault)."""
+    multi = os.environ.get("HERMES_BROWSE_ROOTS", "").strip()
+    if multi:
+        roots = [Path(os.path.expanduser(p)) for p in multi.split(os.pathsep) if p.strip()]
+        if roots:
+            return roots
+    single = os.environ.get("HERMES_BROWSE_ROOT")
+    if single:
+        return [Path(os.path.expanduser(single))]
+    ws_root = _collection_root_for("workspace")
+    return [ws_root, ws_root.parent]
 
 
 def _kill_proc_group(proc: Any) -> None:
@@ -757,16 +777,20 @@ def _ingest_workspace(source_type: str, source_ref: str, dest: Path) -> None:
         src = Path(os.path.expanduser((source_ref or "").strip()))
         if not src.is_dir():
             raise ValueError(f"folder source not found: {src}")
-        # Containment: only ingest folders inside the browsable root (the mounted
-        # vault) — never an arbitrary host path like /opt/data or /etc, which the
-        # raw API would otherwise copy into a servable workspace.
-        broot = _browse_root().resolve()
+        # Containment: only ingest folders inside a configured browse root (the
+        # mounted vault and/or the mounted workspaces root) — never an arbitrary
+        # host path like /opt/data or /etc, which the raw API would otherwise copy
+        # into a servable workspace.
+        broots = [r.resolve() for r in _browse_roots()]
+        resolved_src = None
         try:
-            contained = src.resolve().is_relative_to(broot)
+            resolved_src = src.resolve()
+            contained = any(resolved_src == r or resolved_src.is_relative_to(r) for r in broots)
         except Exception:
             contained = False
         if not contained:
-            raise ValueError(f"folder source must be inside the browsable root ({broot})")
+            roots_desc = ", ".join(str(r) for r in broots)
+            raise ValueError(f"folder source must be inside a configured browse root ({roots_desc})")
         # Skip heavy/VCS dirs so the copy is fast and clean. symlinks=True copies
         # links as-is (does NOT follow them out of the tree → no exfiltration).
         ignore = shutil.ignore_patterns(".git", "node_modules", "dist", "build", ".venv", "__pycache__")

@@ -15,6 +15,8 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 HERMES_HOME="${HOME}/.hermes"          # mounted into the engine container as /opt/data
 ENV_FILE="${HERMES_HOME}/.env"
+PATHS_ENV="${REPO_DIR}/.env"           # path overrides only (VAULT_DIR/WORKSPACES_DIR) — git-ignored,
+                                       # separate from ENV_FILE above (secrets stay in ~/.hermes/.env)
 SEARX="${REPO_DIR}/infra/searxng/settings.yml"
 COMPOSE="docker compose -f ${REPO_DIR}/docker-compose.yml"
 WIPE=0; [ "${1:-}" = "--wipe" ] && WIPE=1
@@ -40,6 +42,50 @@ cp "${REPO_DIR}/hermes/config.yaml" "${HERMES_HOME}/config.yaml"   # config is n
 cp -R "${REPO_DIR}/hermes/skills/." "${HERMES_HOME}/skills/" 2>/dev/null || true
 cp -R "${REPO_DIR}/hermes/profiles" "${HERMES_HOME}/profiles" 2>/dev/null || true
 say "Seeded ${HERMES_HOME} (config.yaml, skills, profiles)."
+
+# 2b) Workspace + vault paths (${PATHS_ENV}) -----------------------------------
+# Two INDEPENDENT, optional host directories, persisted in the repo-root .env
+# (Docker Compose's own var-substitution file — already git-ignored). Obsidian is
+# NOT required: VAULT_DIR only powers the optional Memory/Brain features and
+# defaults to a folder that's auto-created below if it doesn't exist yet.
+# Re-running this script NEVER overwrites a key already present in ${PATHS_ENV}.
+DEFAULT_VAULT_DIR="${HOME}/Documents/Obsidian/Vault"
+_paths_env_get() { [ -f "${PATHS_ENV}" ] && grep -m1 "^${1}=" "${PATHS_ENV}" 2>/dev/null | cut -d= -f2- || true; }
+_paths_env_set_if_missing() { # KEY VALUE COMMENT
+  touch "${PATHS_ENV}"
+  if ! grep -q "^${1}=" "${PATHS_ENV}" 2>/dev/null; then
+    { [ -n "${3:-}" ] && printf '# %s\n' "$3"; printf '%s=%s\n' "$1" "$2"; } >> "${PATHS_ENV}"
+  fi
+}
+
+CUR_VAULT_DIR="$(_paths_env_get VAULT_DIR)"
+if [ -t 0 ] && [ -z "${CUR_VAULT_DIR}" ]; then
+  read -r -p "Obsidian vault directory (optional, Enter for default) [${DEFAULT_VAULT_DIR}]: " ans_vault || ans_vault=""
+  VAULT_DIR="${ans_vault:-${DEFAULT_VAULT_DIR}}"
+else
+  VAULT_DIR="${CUR_VAULT_DIR:-${VAULT_DIR:-${DEFAULT_VAULT_DIR}}}"
+fi
+_paths_env_set_if_missing VAULT_DIR "${VAULT_DIR}" \
+  "Obsidian vault (optional) — Memory/Brain features degrade gracefully if absent/empty."
+
+DEFAULT_WORKSPACES_DIR="${VAULT_DIR}/10_Projects"
+CUR_WORKSPACES_DIR="$(_paths_env_get WORKSPACES_DIR)"
+if [ -t 0 ] && [ -z "${CUR_WORKSPACES_DIR}" ]; then
+  read -r -p "Workspaces directory — where ingested projects live (Enter for default) [${DEFAULT_WORKSPACES_DIR}]: " ans_ws || ans_ws=""
+  WORKSPACES_DIR="${ans_ws:-${DEFAULT_WORKSPACES_DIR}}"
+else
+  WORKSPACES_DIR="${CUR_WORKSPACES_DIR:-${WORKSPACES_DIR:-${DEFAULT_WORKSPACES_DIR}}}"
+fi
+_paths_env_set_if_missing WORKSPACES_DIR "${WORKSPACES_DIR}" \
+  "Where ingested workspace projects live — independent of the vault above."
+
+mkdir -p "${VAULT_DIR}" "${WORKSPACES_DIR}"
+say "Vault directory:      ${VAULT_DIR}"
+say "Workspaces directory: ${WORKSPACES_DIR}"
+if [ ! -d "${VAULT_DIR}/.obsidian" ]; then
+  warn "No .obsidian/ at ${VAULT_DIR} — Obsidian isn't required; Memory/Brain will show an"
+  warn "empty graph until this becomes (or points at) a real Obsidian vault."
+fi
 
 # 3) Secrets (~/.hermes/.env) --------------------------------------------------
 # The ONLY auth credential is CLAUDE_CODE_OAUTH_TOKEN (your subscription).

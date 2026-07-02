@@ -96,6 +96,30 @@ def test_ingest_unknown_source(env):
         d._ingest_workspace("ftp", "x", env / "10_Projects" / "x")
 
 
+def test_ingest_folder_multi_root_containment(env, monkeypatch, tmp_path):
+    """HERMES_BROWSE_ROOTS (pathsep list) allows a folder source from ANY
+    configured root, not just the workspaces root — and still rejects a source
+    outside every configured root."""
+    import os as _os
+
+    workspaces_root = env / "10_Projects"
+    external_root = tmp_path.parent / f"{tmp_path.name}-external"
+    outside = tmp_path.parent / f"{tmp_path.name}-outside"
+    (external_root / "proj-a").mkdir(parents=True)
+    (external_root / "proj-a" / "README.md").write_text("hi")
+    (outside / "proj-b").mkdir(parents=True)
+    monkeypatch.setenv("HERMES_BROWSE_ROOTS", f"{workspaces_root}{_os.pathsep}{external_root}")
+
+    # A source under the SECOND configured root (not the workspaces root) succeeds.
+    dest = workspaces_root / "proj-a"
+    d._ingest_workspace("folder", str(external_root / "proj-a"), dest)
+    assert (dest / "README.md").read_text() == "hi"
+
+    # A source outside every configured root is still rejected.
+    with pytest.raises(ValueError, match="configured browse root"):
+        d._ingest_workspace("folder", str(outside / "proj-b"), workspaces_root / "proj-b")
+
+
 def test_provision_does_not_clobber_existing_claude_md(env):
     m = load_manifest(SKILL_TOOL)
     folder = env / "10_Projects" / "existing"

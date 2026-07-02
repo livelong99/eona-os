@@ -3,7 +3,12 @@
 set -uo pipefail
 
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VAULT="${HERMES_VAULT_PATH:-${HOME}/Documents/Obsidian/Vault}"
+# Same repo-root .env docker-compose/install.sh read (VAULT_DIR/WORKSPACES_DIR) —
+# unifies this script's host-side path checks with the actual configured paths
+# instead of a second, drifting default.
+[ -f "${REPO_DIR}/.env" ] && { set -a; . "${REPO_DIR}/.env" 2>/dev/null; set +a; }
+VAULT="${HERMES_VAULT_PATH:-${VAULT_DIR:-${HOME}/Documents/Obsidian/Vault}}"
+WORKSPACES="${WORKSPACES_DIR:-${VAULT}/10_Projects}"
 ENV_FILE="${HOME}/.hermes/.env"
 fail=0
 ok()   { printf "\033[1;32m✓ %s\033[0m\n" "$*"; }
@@ -32,6 +37,23 @@ if grep -rIlE '(AIza[0-9A-Za-z_-]{20,}|sk-[A-Za-z0-9]{20,})' "${VAULT}" 2>/dev/n
   bad "Possible secret inside the Obsidian vault — keep secrets out of the vault."
 else
   ok "No obvious secrets in the vault"
+fi
+
+# 2b) Configured path directories (vault optional; both auto-created by install.sh) -
+if [ -d "${VAULT}" ]; then
+  if [ -d "${VAULT}/.obsidian" ]; then
+    ok "Vault directory present (Obsidian-initialized): ${VAULT}"
+  else
+    info "Vault directory present but not an Obsidian vault yet: ${VAULT} (fine — Memory/Brain just stay sparse)"
+  fi
+else
+  info "Vault directory not created yet: ${VAULT} (scripts/install.sh creates it)"
+fi
+if [ -d "${WORKSPACES}" ]; then
+  [ -w "${WORKSPACES}" ] && ok "Workspaces directory present + writable: ${WORKSPACES}" \
+    || bad "Workspaces directory present but NOT writable: ${WORKSPACES}"
+else
+  info "Workspaces directory not created yet: ${WORKSPACES} (scripts/install.sh creates it)"
 fi
 
 # 3) .env perms + Claude token -------------------------------------------------
