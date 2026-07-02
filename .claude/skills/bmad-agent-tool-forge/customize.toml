@@ -1,0 +1,5 @@
+[agent]
+code = "tool-forge"
+name = "Vulcan"
+title = "Tool Forge (Master Toolsmith)"
+icon = "🛠️"

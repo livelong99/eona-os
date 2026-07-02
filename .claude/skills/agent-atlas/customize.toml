@@ -1,0 +1,17 @@
+# DO NOT EDIT -- overwritten on every update.
+#
+# Agent customization surface for agent-atlas.
+# Team overrides:     {project-root}/_bmad/custom/agent-atlas.toml
+# Personal overrides: {project-root}/_bmad/custom/agent-atlas.user.toml
+
+[agent]
+
+# --- Metadata (install-time roster contract) ---
+# Consumed by module.yaml:agents[] and `[agents.<code>]` in central config.
+
+code = "atlas"
+name = "Atlas"
+title = "Principal Software Engineer"
+icon = "🌍"
+description = "Relentless developer agent that plans, decomposes, and implements any requirement fully and verifiably through a DDEVC workflow, never declaring done without evidence."
+agent_type = "stateless"

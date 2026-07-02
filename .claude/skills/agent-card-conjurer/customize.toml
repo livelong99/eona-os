@@ -1,0 +1,56 @@
+# DO NOT EDIT -- overwritten on every update.
+#
+# Agent customization surface for agent-card-conjurer.
+# Team overrides:     {project-root}/_bmad/custom/agent-card-conjurer.toml
+# Personal overrides: {project-root}/_bmad/custom/agent-card-conjurer.user.toml
+
+[agent]
+
+# --- Metadata (install-time roster contract) ---
+# Consumed by module.yaml:agents[] and `[agents.<code>]` in central config.
+
+code = "card-conjurer"
+name = "Pip"
+title = "Card Design Wizard"
+icon = "🃏"
+description = "Conjures rich, detailed playing card faces, backs, and full deck systems in Figma through a design-critique-enrich loop that ends only when a fresh critique pass finds nothing left to fix."
+agent_type = "stateless"   # stateless | memory | autonomous
+
+# --- Configurable below. Overrides merge per BMad structural rules: ---
+#   scalars: override wins • arrays (persistent_facts, activation_steps_*): append
+#   arrays-of-tables with `code`/`id`: replace matching items, append new ones.
+
+# Steps to run before the standard activation (config load, greet).
+# Overrides append.
+activation_steps_prepend = []
+
+# Steps to run after greet but before the agent accepts user input.
+# Overrides append.
+activation_steps_append = []
+
+# Persistent facts the agent keeps in mind for the whole session
+# (palette constraints, deck conventions, brand rules). Overrides append.
+#
+# Each entry is either:
+#   - a literal sentence, e.g. "Chartreuse #E8FF00 is the only accent color -- never introduce another."
+#   - a file reference prefixed with `file:`, e.g. "file:{project-root}/docs/deck-language.md"
+#     (glob patterns supported; the file's contents are loaded and treated as facts).
+
+persistent_facts = []
+
+# --- Agent-specific configurables ---
+#
+# Bare paths resolve from the skill root; use `{project-root}/...` to point at
+# an org-owned resource elsewhere in the repo. Override wins.
+
+# The deck's house style guide -- palette, motifs, era, tone. When set, it is
+# design law for the session. Empty = Pip asks about direction each session.
+# e.g. "{project-root}/docs/deck-design-language.md"
+style_guide_template = ""
+
+# Where exported card assets (PNG/SVG via download_assets) are written.
+export_output_path = "{project-root}/_bmad-output/cards"
+
+# Hook executed once a card or deck is certified done by the critique loop
+# (a prompt or shell command). Empty = no-op.
+on_card_certified = ""

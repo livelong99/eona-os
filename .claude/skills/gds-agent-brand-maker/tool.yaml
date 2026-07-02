@@ -1,0 +1,90 @@
+# Brand Maker (Forge) — Tool Manifest
+# Lives beside SKILL.md; loaded by engine/tools/tool_manifest.py at runtime.
+# Schema: engine/schemas/tool_manifest.schema.json
+tool: brand-maker
+title: Brand Maker (Forge)
+description: >
+  Mockup-first brand identity creator. Runs an anti-cliché creative pipeline —
+  deconstruct the brand, spar on breakthrough metaphors, design interactive HTML
+  logo mockups the user finalizes, then write model-tuned image prompts and
+  marketing-video prompts. Delivers Google Flow-ready packets for every asset.
+
+launch:
+  skill: gds-agent-brand-maker
+  session: per-tool
+
+# Brand Maker runs as a Ruflo multi-agent swarm: the Art Director orchestrates a
+# team (Brand Strategist, UX/Visual Designer, Prompt Engineer, Critic) via Task +
+# Ruflo memory, and raises qna.json to clarify with the user at any stage.
+swarm: true
+steering: CLAUDE.md.tmpl
+
+inputs:
+  - id: workspace
+    label: "Base it on an existing workspace (optional)"
+    type: workspace
+    required: false
+  - id: brand
+    label: "Brand / product name"
+    type: text
+    required: true
+  - id: brief_docs
+    label: "Brand / product docs (optional)"
+    type: file[]
+    required: false
+  - id: color_refs
+    label: "Color references (optional)"
+    type: image[]
+    required: false
+
+steps:
+  - id: stage0
+    title: "Brand Intake Q&A"
+    ref: references/0-brand-intake.md
+    hitl: true
+    artifacts: ["brand-intake.md"]
+    ui: chat
+
+  - id: stage1
+    title: "Deconstruction & Anti-Bias"
+    ref: references/1-deconstruct-antibias.md
+    hitl: true
+    artifacts: ["deconstruct-antibias.md"]
+    ui: chat
+
+  - id: stage2
+    title: "Domain Shifting & Sparring"
+    ref: references/2-domain-shift-spar.md
+    hitl: true
+    artifacts: ["domain-shift-spar.md"]
+    ui: chat
+
+  - id: stage3
+    title: "HTML Mockup Studio"
+    ref: references/3-html-mockup-studio.md
+    hitl: true
+    artifacts: ["mockup.html", "design-brief.md"]
+    ui: artifact-iframe
+
+  - id: stage4
+    title: "Image Prompt Generation"
+    ref: references/4-image-prompts.md
+    hitl: false
+    artifacts: ["asset-prompts.md"]
+    ui: file-cards
+
+  - id: stage5
+    title: "Marketing Campaign Video"
+    ref: references/5-marketing-video.md
+    hitl: false
+    artifacts: ["video-prompts.md"]
+    ui: file-cards
+
+artifacts_root: "${HERMES_VAULT_PATH:-/Users/perkypanda/Documents/Obsidian/Vault}/30_Resources/Brands/{brand}/"
+
+brain:
+  reads:
+    - preference-spine
+    - reasoningbank
+  writes:
+    - "30_Resources/Brands/{brand}/"

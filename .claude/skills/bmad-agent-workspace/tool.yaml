@@ -1,0 +1,71 @@
+# Workspace — Architect-orchestrated SDLC pipeline. Tool manifest (beside SKILL.md).
+# Loaded by engine/tools/tool_manifest.py. Schema: engine/schemas/tool_manifest.schema.json.
+tool: workspace
+title: Workspace (Architect SDLC)
+description: >
+  An ingested project (local folder, public GitHub repo, or a promoted brainstorm)
+  driven end-to-end by an Architect orchestrator: provision a custom per-workspace
+  agent team, produce a design (with Q&A + agent review gates), plan a sprint
+  (epics/stories), then implement story-by-story with per-story Architect review and
+  a manual/auto gate.
+
+launch:
+  skill: bmad-agent-workspace
+  session: per-tool
+
+# Swarm tool: widen the run with the native Task/Agent tool + the claude-flow (Ruflo)
+# MCP, provision the session (ruflo init), and live-tail the team's transcripts.
+swarm: true
+steering: CLAUDE.md.tmpl
+
+# The launch is driven by POST /v1/tools/workspace/create (ingest + launch in one);
+# these inputs document the create form.
+inputs:
+  - id: name
+    label: "Workspace name"
+    type: text
+    required: true
+  - id: source_type
+    label: "Source"
+    type: select
+    options: ["folder", "github", "brainstorm"]
+    required: true
+  - id: source_ref
+    label: "Folder path / GitHub URL / brainstorm slug"
+    type: text
+    required: true
+
+steps:
+  - id: provision
+    title: "Provision (team + ruflo + CLAUDE.md)"
+    ref: references/0-provision.md
+    hitl: true
+    artifacts: ["workspace.json", "CLAUDE.md"]
+    ui: chat
+  - id: design
+    title: "Design (architecture + Q&A + review)"
+    ref: references/1-design.md
+    hitl: true
+    artifacts: ["_bmad-output/planning-artifacts/architecture.md", "qna.json", "workspace.json"]
+    ui: qna-json
+  - id: sprint
+    title: "Sprint plan (epics + stories)"
+    ref: references/3-sprint.md
+    hitl: true
+    artifacts: ["_bmad-output/planning-artifacts/epics.md", "_bmad-output/implementation-artifacts/sprint-status.yaml", "workspace.json"]
+    ui: qna-json
+  - id: implement
+    title: "Implement (story loop)"
+    ref: references/4-implement.md
+    hitl: true
+    artifacts: ["_bmad-output/implementation-artifacts/*.md", "reviews/*.md", "workspace.json"]
+    ui: custom
+
+artifacts_root: "${HERMES_WORKSPACES_ROOT:-/vault/10_Projects}/{name}/"
+
+brain:
+  reads:
+    - preference-spine
+    - reasoningbank
+  writes:
+    - "10_Projects/{name}/"

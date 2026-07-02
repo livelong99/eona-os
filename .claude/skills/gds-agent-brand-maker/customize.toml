@@ -1,0 +1,7 @@
+[agent]
+code = "brand-maker"
+name = "Forge"
+title = "Brand Identity Specialist"
+icon = "🔥"
+description = "Mockup-first brand identity creator: anti-cliché creative discovery, interactive HTML logo mockups the user finalizes, then model-tuned image prompts (Nano Banana / Nano Banana Pro) and marketing-video prompts (Omni Flash) generated from a per-model prompt-rules registry."
+agent_type = "stateless"

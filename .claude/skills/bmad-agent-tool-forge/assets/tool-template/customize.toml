@@ -1,0 +1,5 @@
+[agent]
+code = "{{TOOL_SLUG}}"
+name = "{{ORCHESTRATOR_NAME}}"
+title = "{{TOOL_TITLE}}"
+icon = "{{ICON}}"

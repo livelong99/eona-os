@@ -1,0 +1,259 @@
+{
+  "schema_version": "1.0",
+  "description": "Per-model prompt-generation rules for the Forge brand-maker agent. The single source of truth for HOW to prompt each generation model for maximum quality and brand/asset consistency. New models are onboarded once via references/onboard-model.md, then targeted like any other. Stage references read this file at runtime; never improvise a model's prompt format from memory.",
+  "updated": "2026-06-15",
+  "generation_surface": "Google Flow (https://labs.google/flow) — the user generates ALL image and video assets here; Flow hosts Nano Banana, Nano Banana Pro, and Omni Flash. Forge delivers Flow-ready packets (prompt + reference images to upload as ingredients / first frames) and does NOT call generation CLIs or APIs. The CLI / fal.ai details inside each model's access block are optional scripted alternatives only.",
+  "defaults": {
+    "image_final": "nano-banana-pro",
+    "image_ideation": "nano-banana",
+    "video": "omni-flash"
+  },
+  "entry_schema": {
+    "core_fields": ["id", "display_name", "modality", "provider", "status", "access", "prompt_philosophy", "prompt_structure", "consistency_techniques", "style_levers", "banned_terms", "negative_prompt_guidance", "parameters", "failure_modes", "gold_example_prompt", "sources"],
+    "image_additional": ["when_to_use", "text_rendering", "reference_image_support"],
+    "video_additional": ["shot_and_camera_language", "image_to_video", "marketing_best_practices", "alternative_candidates"]
+  },
+  "models": [
+    {
+      "id": "nano-banana",
+      "display_name": "Nano Banana (Gemini 2.5 Flash Image)",
+      "modality": "image",
+      "provider": "Google (Gemini)",
+      "status": "active",
+      "access": {
+        "tool": "Google Flow (primary surface — paste the prompt, upload reference images as ingredients). Scripted alternative: gemini CLI nanobanana extension.",
+        "example_invocation": "gemini --yolo \"/generate 'A flat vector logo for ...' --count=1 --seed=42 --aspect=1:1\"  | edit existing: gemini --yolo \"/edit nanobanana-output/logo.png 'Change the wordmark color to #0B5FFF, keep every other element identical' --seed=42\"",
+        "model_flag_or_env": "Default model gemini-2.5-flash-image (~$0.039/image, ~1290 output tokens). Override with env NANOBANANA_MODEL=gemini-2.5-flash-image (the extension's own default has drifted to a newer Nano Banana build, so pin this explicitly for reproducibility). Auth env: GEMINI_API_KEY (the wrapper also reads NANOBANANA_API_KEY). Always pass --yolo to auto-approve tool actions.",
+        "notes": "Outputs land in ./nanobanana-output/. All outputs carry an invisible SynthID watermark."
+      },
+      "when_to_use": "High-volume, low-latency, cheap ideation: quick concept exploration, thumbnails, throwaway variations, simple single-subject scenes with little or no text, 0.5K drafts. Rule of thumb: ideate on Flash, produce final brand assets on Pro.",
+      "prompt_philosophy": "Nano Banana is a natural-language, world-knowledge-driven model that reasons over full scene descriptions, NOT a keyword/tag engine like SDXL. Write coherent prose describing the whole scene, the relationships between elements, and intent; it rewards narrative specificity and follows complex multi-step instructions in a single pass. Keyword-salad prompts degrade quality and consistency.",
+      "prompt_structure": [
+        { "block": "primary_operation", "purpose": "Lead with the strong verb / what kind of asset this is so intent is unambiguous up front.", "example": "Create a clean, production-ready vector brand logo for a fintech app called 'Northwind'." },
+        { "block": "subject", "purpose": "The core mark/character/object with its fixed, repeatable defining traits (these are the consistency anchors).", "example": "A single geometric mark: a stylized north-pointing compass needle formed from two interlocking chevrons, perfectly symmetrical." },
+        { "block": "style_medium", "purpose": "Tactile medium / aesthetic register (vector, flat, 3D render, editorial photo, art movement).", "example": "Minimalist flat vector illustration, geometric, sharp clean edges, no gradients." },
+        { "block": "color_typography", "purpose": "Exact named/hex colors and explicit font description; quote any literal text to render.", "example": "Deep navy (#0B1E3F) mark with a single warm-amber (#F5A623) accent; wordmark 'Northwind' in a bold geometric sans-serif." },
+        { "block": "composition_camera", "purpose": "Framing/layout using photographic-cinematic terms when relevant (centered, lockup, negative space).", "example": "Mark centered above the wordmark, generous negative space, center-framed, isolated." },
+        { "block": "background_context", "purpose": "Explicit background as a POSITIVE statement (state what IS there, e.g. 'flat white background').", "example": "On a flat solid white background, no scene, no shadows." },
+        { "block": "constraints_locks", "purpose": "Reinforce what must stay identical and use positive constraints instead of negatives.", "example": "Single self-contained logo, no surrounding UI, no mockup frame, no extra text." }
+      ],
+      "consistency_techniques": [
+        "REFERENCE IMAGES ARE THE #1 LEVER: pass the approved logo/character as an input image (extension search paths include ./, ./images/, ./input/, ./nanobanana-output/, ~/Downloads, ~/Desktop). The model 'merges multiple input images' and keeps the supplied identity — up to ~14 reference images per prompt.",
+        "EDIT, DON'T REGENERATE: for any change to an existing brand asset use /edit on the prior PNG with an instruction that names ONLY the delta and explicitly says 'keep every other element exactly the same'. This is semantic inpainting and preserves the rest of the mark; regenerating from scratch drifts.",
+        "FIXED DESCRIPTIVE ANCHORS: store the logo/character as a verbatim canonical description block (exact shapes, exact hex colors, exact font family, layout) and paste it identically into every prompt. Repeat the defining traits every time — do not paraphrase between runs.",
+        "PIN THE SEED: pass --seed=<fixed int> on both generation and edits for reproducible sampling across runs of the same prompt.",
+        "PIN THE MODEL: set NANOBANANA_MODEL=gemini-2.5-flash-image so the underlying model never silently upgrades between regenerations.",
+        "BUILD A REFERENCE/CHARACTER SHEET: first generate a single sheet showing the mark at multiple sizes / on multiple backgrounds, then feed that sheet back as the reference for all subsequent placements.",
+        "RESET ON DRIFT: if features degrade after many iterative edits, start a fresh invocation seeded from the original clean reference image + canonical description rather than continuing to edit a drifted file.",
+        "ONE DELTA PER EDIT: make small, single-change edits sequentially; cramming several changes into one edit increases unintended mutation of locked elements."
+      ],
+      "style_levers": [
+        "Tactile medium naming: 'flat vector illustration', '3D render', 'editorial photograph', 'matte risograph print', 'screen-printed', 'embossed foil on paper'.",
+        "Art-movement / design-school anchors: 'Bauhaus geometric', 'Swiss International typographic style', 'mid-century modern', 'Memphis design'.",
+        "Photographic/cinematic control (for photoreal brand imagery): lens & body terms like '85mm portrait lens', 'macro lens', 'f/1.8 shallow depth of field', 'wide-angle', 'low-angle', 'Dutch angle', plus camera-stock vibes ('shot on Fujifilm', 'medium-format analog film, pronounced grain').",
+        "Lighting design: 'three-point softbox studio setup', 'chiaroscuro high contrast', 'golden-hour backlighting', 'soft radiant studio light'.",
+        "Materiality over generic nouns: say 'navy blue tweed' not 'jacket', 'brushed anodized aluminium' not 'metal' — naming physical makeup sharpens the render.",
+        "Color grading vocabulary: 'muted teal cinematic grade', 'high saturation', 'desaturated film look'."
+      ],
+      "banned_terms": ["4k", "8k", "hyperdetailed", "ultra-detailed", "masterpiece", "trending on artstation", "award-winning", "best quality", "highly detailed", "photorealistic + octane render + unreal engine (stacked render-engine tags)", "intricate / stunning / beautiful (empty intensifiers)", "comma-separated keyword/tag salad in place of sentences"],
+      "negative_prompt_guidance": "This model has NO dedicated negative-prompt field and responds poorly to 'no X' phrasing — naming an object (even to forbid it) can summon it. Use POSITIVE FRAMING: describe the desired end state instead. Prefer 'an empty street' over 'no cars'; 'a flat solid white background' over 'no background clutter'; 'a single isolated logo' over 'no mockup'. When you must exclude, pair it with the positive replacement: 'plain white background with the mark only'.",
+      "text_rendering": "Among the strongest text renderers available — designed for legible, stylized text in logos, infographics, menus and marketing assets, and can translate/localize text. To get accurate brand-name typography: (1) put the literal string in straight quotes, e.g. render the word 'Northwind'; (2) describe the typeface explicitly ('bold geometric sans-serif', or a named family like 'Century Gothic'); (3) specify weight/case/color/placement; (4) keep total words short — long paragraphs of in-image text degrade; (5) 'text-first' hack: have a text model finalize the exact wording, then pass it verbatim in quotes. Always verify spelling in output and fix via /edit rather than regenerating.",
+      "reference_image_support": "Yes — first-class. Accepts multiple input images (up to ~14) that it fuses/merges: drop the object/logo/character into a new scene, restyle with a supplied texture or palette, or maintain identity across settings. For brand consistency this is the primary mechanism: always supply the canonical logo/brand asset as a reference image and instruct the model to preserve it. The CLI auto-discovers images from ./, ./images/, ./input/, ./nanobanana-output/, ~/Downloads, ~/Desktop.",
+      "parameters": {
+        "aspect_ratios": "--aspect= supports 1:1 (default), 16:9, 9:16, 4:3, 3:4, 3:2, 2:3, 5:4, 4:5, 21:9 (and extreme 1:4/4:1/1:8/8:1 on newer Nano Banana builds). Use 1:1 for logos/icons.",
+        "variation_count": "--count=N (1-8). For brand work prefer --count=1 with a fixed --seed for reproducibility; use --count=3 only when intentionally exploring options. --variations=\"lighting,angle,mood\" to vary specific axes.",
+        "other_useful_flags": "--seed=<int> (reproducibility), --styles=\"a,b\" (apply named styles), --format=grid|separate, --preview (auto-open). Icon helpers: --sizes=\"64,128,256,512\", --type=\"app-icon|favicon|ui-element\", --corners=\"rounded|sharp\". Always --yolo to skip approval prompts. Note: all outputs carry an invisible SynthID watermark."
+      },
+      "failure_modes": [
+        "Keyword-salad prompts -> generic/incoherent output. Fix: rewrite as full descriptive prose with element relationships.",
+        "Negative phrasing summons the unwanted object ('no text' can still produce text). Fix: positive framing ('clean background, mark only').",
+        "Regenerating instead of editing -> logo/identity drifts each run. Fix: /edit the prior PNG + reference image, name only the delta, lock the rest.",
+        "Stacking quality buzzwords (4k, masterpiece, octane) -> plastic 'AI look'. Fix: delete them; specify real medium, lens, lighting, materials.",
+        "Cumulative drift after many sequential edits. Fix: restart from the original clean reference + canonical description, keep edits to one change each.",
+        "Misspelled in-image brand text. Fix: quote the exact string, name the font, keep text short, correct via targeted /edit not regenerate.",
+        "Model silently upgraded by the extension -> output style shifts. Fix: pin NANOBANANA_MODEL=gemini-2.5-flash-image and a fixed --seed.",
+        "Asking for a logo but getting a full mockup/scene. Fix: state 'single isolated logo on a flat solid white background, no UI, no mockup frame'."
+      ],
+      "gold_example_prompt": "Create a clean, production-ready vector brand logo for a fintech company called \"Northwind\". The mark is a single stylized north-pointing compass needle formed from two interlocking chevrons, perfectly symmetrical, with sharp clean geometric edges. Style: minimalist flat vector illustration in the Swiss International typographic tradition, no gradients, no texture, no drop shadows. Color: deep navy (#0B1E3F) for the mark with one warm-amber (#F5A623) accent on the upper chevron. Below the mark, render the wordmark \"Northwind\" in a bold geometric sans-serif, all lowercase, in the same deep navy. Composition: mark centered directly above the wordmark as a vertical lockup, generous even negative space around it, center-framed and isolated. Place it on a flat solid white background with the logo as the only element. Output a single self-contained logo suitable for export.   [For any revision, run /edit on the saved PNG with the same --seed, e.g. \"Recolor only the amber accent to teal (#11A6A1); keep the mark shape, wordmark, font, layout, and white background exactly the same.\"]",
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/image-generation",
+        "https://cloud.google.com/blog/products/ai-machine-learning/ultimate-prompting-guide-for-nano-banana",
+        "https://developers.googleblog.com/en/introducing-gemini-2-5-flash-image/",
+        "https://github.com/gemini-cli-extensions/nanobanana",
+        "https://docs.aimlapi.com/api-references/image-models/google/gemini-2.5-flash-image"
+      ]
+    },
+    {
+      "id": "nano-banana-pro",
+      "display_name": "Nano Banana Pro (Gemini 3 Pro Image)",
+      "modality": "image",
+      "provider": "Google (Gemini)",
+      "status": "active",
+      "access": {
+        "tool": "Google Flow (primary surface — paste the prompt, upload reference images as ingredients; select the Pro / higher-quality image model). Scripted alternative: gemini CLI nanobanana extension.",
+        "example_invocation": "export NANOBANANA_MODEL=gemini-3-pro-image-preview && gemini --yolo \"/generate 'minimalist wordmark logo for DECKHEADS, geometric sans-serif, single deep-indigo color #2B2A6B on transparent background, perfectly centered, 1:1' --count=2 --seed=42\"",
+        "model_flag_or_env": "export NANOBANANA_MODEL=gemini-3-pro-image-preview",
+        "notes": "Default extension model is gemini-3.1-flash-image-preview; also accepts gemini-2.5-flash-image (v1). /generate flags: --count=N (1-8), --seed=123 (reproducibility), --styles=\"s1,s2\", --variations=\"lighting,angle,...\", --format=grid|separate, --preview. Output saved to ./nanobanana-output/. Aspect ratio and 1K/2K/4K resolution are NOT CLI flags — request them inside the prompt text. Use --yolo (alias for --approval-mode yolo) for non-interactive policy-blocked runs; can also pass --allowed-mcp-server-names nanobanana. All outputs carry SynthID watermark + C2PA content credentials."
+      },
+      "when_to_use": "PRO when output quality and correctness matter more than speed/cost: brand logos and wordmarks, packaging, posters, infographics/diagrams, UI mockups, any image with legible text or multiple text blocks, multi-element compositions, 2K/4K deliverables, multilingual text, search-grounded factual diagrams, and anything needing the 'Thinking' reasoning pass. Use FLASH (nano-banana) for high-volume, low-latency, cheap ideation. Rule of thumb: ideate on Flash, produce final brand assets on Pro.",
+      "differences_from_flash": [
+        "Text rendering: Pro renders long sentences, paragraphs, and complex logo lettering legibly; Flash distorts text and softens fine detail — decisive for any typography/wordmark work.",
+        "Reasoning ('Thinking'): Pro runs an internal multi-step reasoning pass and can emit unbilled interim 'thought images' to test composition before final output; it follows complex multi-constraint instructions Flash drops.",
+        "Resolution: Pro supports 1K/2K/4K (4K ~16MP, ~2000 tokens); Flash adds a 0.5K draft tier and is tuned for speed at lower res.",
+        "Multi-element composition: Pro keeps layered scenes and up to 5 distinct people/characters coherent; Flash loses structure as scenes get busy.",
+        "Reference depth: both accept up to 14 reference images, but Pro maintains far stronger identity/brand consistency across many refs (full style-guide loading: logo + palette + product shots + character turnarounds at once).",
+        "Search grounding: Pro leverages Gemini 3 real-world knowledge + web search for factually accurate diagrams/infographics.",
+        "Prompting style shifts: Pro rewards dense, structured, narrative prompts with explicit text/typography/layout constraints; Flash favors shorter prompts since it ignores fine constraints anyway.",
+        "Cost/latency: Pro is slower and pricier per image; Flash is the cheap high-throughput path."
+      ],
+      "prompt_philosophy": "Write a dense, structured NARRATIVE (not a keyword salad) that names every load-bearing element: subject, composition, lighting, style, and exact text. Exploit Pro's reasoning by stating constraints explicitly and letting it 'think'; lock brand identity by quoting exact text, hex colors, and font descriptors, and by reusing the same reference images + seed across runs.",
+      "prompt_structure": [
+        { "block": "operation_verb", "purpose": "Open with the primary action so the model knows the task type.", "example": "Create a / Render a / Edit the attached image to..." },
+        { "block": "subject", "purpose": "The concrete thing, with specific adjectives and materials.", "example": "a minimalist wordmark logo for the brand 'DECKHEADS'" },
+        { "block": "exact_text", "purpose": "Quote every string verbatim and describe its typography — Pro's biggest strength.", "example": "the word \"DECKHEADS\" in a bold, geometric sans-serif, uppercase, even letter-spacing, perfectly legible" },
+        { "block": "composition_canvas", "purpose": "Frame, alignment, and aspect ratio (stated in prompt, not a flag).", "example": "centered, generous negative space, 1:1 square canvas" },
+        { "block": "color_brand_spec", "purpose": "Exact hex/Pantone and where each color goes — anchors brand consistency.", "example": "single fill color deep indigo #2B2A6B on a transparent background, no gradients" },
+        { "block": "style_media", "purpose": "Aesthetic and rendering medium.", "example": "flat vector style, clean edges, scalable logo aesthetic, no photographic texture" },
+        { "block": "lighting_camera", "purpose": "For photographic/product shots only; skip for flat logos.", "example": "soft three-point studio softbox lighting, shallow depth of field f/1.8" },
+        { "block": "reference_roles", "purpose": "When refs are attached, assign each one an explicit role.", "example": "Use Image 1 as the strict logo reference; match its exact proportions and colorway" },
+        { "block": "output_constraints", "purpose": "Resolution and any hard rules, stated in text.", "example": "Output at 4K. Do not alter the wordmark spelling or color." }
+      ],
+      "consistency_techniques": [
+        "Reuse the SAME --seed integer on every regeneration of a given asset; pair it with an unchanged prompt to maximize reproducibility.",
+        "Attach the canonical logo/brand asset as a reference image and instruct: 'Use Image 1 as a strict reference; reproduce its exact proportions, colorway, and letterforms — do not redraw or restyle.'",
+        "Load a full style guide at once (up to 14 refs): wordmark, icon, color swatches, prior approved renders — gives Pro complete brand context in one pass.",
+        "Quote exact text verbatim AND pin typography (weight, case, family descriptor) so the wordmark is identical run-to-run.",
+        "Pin colors with explicit hex codes and forbid drift: 'fill color exactly #2B2A6B, no gradients, no recoloring.'",
+        "Keep a single canonical, frozen prompt string per asset in the registry/brief; only vary explicitly intended fields between runs.",
+        "Edit conversationally rather than regenerating from scratch — say 'keep the logo exactly the same, only change the background' so Pro preserves the brand element via semantic masking.",
+        "For multi-turn edits, lean on Pro's identity preservation: it carries logos/faces/products across turns better than Flash, so chain edits instead of restarting."
+      ],
+      "style_levers": [
+        "Media: flat vector / 3D render / photorealistic product shot / line-art / engraved emblem",
+        "Lighting: three-point softbox, chiaroscuro high-contrast, golden-hour backlight, soft radiant studio",
+        "Camera: lens (f/1.8 shallow DoF, macro, wide-angle), angle (low/eye-level), device emulation (Fujifilm color science, GoPro distortion)",
+        "Color grading: muted teal cinematic, high-saturation editorial, monochrome, 1980s grainy film stock",
+        "Material specificity: 'navy tweed' over 'jacket', 'brushed aluminum' over 'metal', 'matte ceramic' over 'mug'",
+        "Composition: negative space, centered/rule-of-thirds, aspect ratio (1:1, 16:9, 9:16, 21:9, 4:5, 3:2 etc.)",
+        "Resolution tier stated in-prompt: 'Output at 2K' / 'Output at 4K'"
+      ],
+      "banned_terms": ["4k (as a quality-magic token rather than a real resolution instruction)", "trending on artstation", "masterpiece", "best quality", "8k / ultra HD / highly detailed (as filler quality tokens)", "award-winning", "keyword-salad comma stacks with no sentence structure", "negative phrasing like 'no cars' (use positive 'empty street' instead)"],
+      "negative_prompt_guidance": "Pro has no dedicated negative-prompt field; express exclusions positively and inside the main prompt. Prefer describing the desired state ('an empty street', 'a clean solid background') over 'no X'. When you must forbid something for brand fidelity, phrase it as a hard constraint sentence: 'Do not alter the spelling, do not add gradients, do not change the fill color, keep the background transparent.' Avoid stacking 'no/without' clauses, which the model handles poorly.",
+      "text_rendering": "Pro is the standout for typography — exploit it for wordmarks and brand copy. (1) Enclose every string in straight quotes: render \"DECKHEADS\". (2) Specify typography precisely: weight (bold/thin), case (uppercase), family descriptor ('geometric sans-serif', 'elegant brush script', 'heavy Impact'), letter-spacing, and exact placement. (3) For multiple text blocks, enumerate them line-by-line with per-line styling. (4) For multilingual/localized wordmarks, write the prompt in one language and instruct 'then translate the text into Korean and Arabic' — but verify, as multilingual grammar can still err. (5) Demand legibility explicitly ('perfectly legible, sharp edges'); note very small text can still degrade, so size brand text generously. (6) Text-first hack: have the LLM finalize the exact copy before generation, then pass it verbatim in quotes.",
+      "reference_image_support": "Up to 14 reference images per prompt (Google frames this as up to ~6 character + ~6 object refs for composition). Formats: PNG, JPEG, WebP, HEIC, HEIF. Assign an explicit ROLE to each ('Image 1 = strict logo reference, Image 2 = color palette, Image 3 = product to place'). Best uses: brand/character identity lock, product placement, style transfer, applying a brand design onto 3D objects/surfaces. The nanobanana CLI extension passes references via attached image inputs alongside the /generate prompt.",
+      "parameters": {
+        "aspect_ratios": "1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9 (set via API aspect_ratio config or stated in the prompt text when using the CLI; Pro does NOT support the 1:4/4:1/8:1 extremes that Flash adds).",
+        "resolution_4k": "1K (default), 2K, and 4K. API field image_size = \"1K\" | \"2K\" | \"4K\" in generation_config; 4K ~16MP costs ~2000 output tokens. Via the CLI, request resolution inside the prompt ('Output at 4K').",
+        "variation_count": "nanobanana CLI: --count=N where N is 1-8 (default 1). Use --seed=<int> for reproducibility; --variations=\"lighting,angle,color-palette,composition,mood,season,time-of-day\" to steer how variants differ.",
+        "other_useful_flags": "--styles=\"photorealistic,minimalist,...\" | --format=grid|separate | --preview (auto-open). Env: NANOBANANA_MODEL selects the model. Run mode: gemini --yolo (== --approval-mode yolo) for non-interactive; --allowed-mcp-server-names nanobanana to whitelist under policy. Outputs land in ./nanobanana-output/. Safety: all outputs carry SynthID watermark + C2PA content credentials."
+      },
+      "failure_modes": [
+        "Very small text and fine micro-detail can still render blurry — size brand text generously and avoid tiny taglines.",
+        "Character/brand consistency across many sequential edits can drift — re-anchor with the reference image and seed periodically.",
+        "Multilingual/translated text may contain grammar or spelling errors — always verify localized wordmarks.",
+        "Complex composite edits can introduce unnatural artifacts at seams/reflections.",
+        "Search-grounded diagrams can still contain factual errors — verify data-driven visuals.",
+        "Over-prompting with quality-magic tokens ('masterpiece, 8k, trending') degrades rather than helps — Pro reads natural language.",
+        "Negative 'no X' phrasing is unreliable — leaks the excluded element; use positive descriptions.",
+        "Color drift on regeneration without pinned hex + seed — logos can shift hue between runs."
+      ],
+      "gold_example_prompt": "Create a clean, professional vector wordmark logo for the card-game brand \"DECKHEADS\". Render the word \"DECKHEADS\" in uppercase, bold, geometric sans-serif letterforms with even, slightly tight letter-spacing, perfectly legible with crisp edges. Replace the letter 'A' with a subtle stylized playing-card-suit spade in the same color, integrated so it still reads as an A. Single flat fill color deep indigo #2B2A6B on a fully transparent background — no gradients, no shadows, no outer glow. Centered composition with generous symmetric negative space, balanced optical weight, 1:1 square canvas. Flat vector aesthetic, scalable logo style, no photographic texture or 3D bevel. Output at 4K. Constraints: do not alter the spelling, do not add any extra text or tagline, do not change the fill color, keep the background transparent.",
+      "sources": [
+        "https://ai.google.dev/gemini-api/docs/image-generation",
+        "https://blog.google/products-and-platforms/products/gemini/prompting-tips-nano-banana-pro/",
+        "https://cloud.google.com/blog/products/ai-machine-learning/ultimate-prompting-guide-for-nano-banana",
+        "https://cloud.google.com/blog/products/ai-machine-learning/nano-banana-pro-available-for-enterprise",
+        "https://github.com/gemini-cli-extensions/nanobanana",
+        "https://aistudio.google.com/models/gemini-3-pro-image",
+        "https://davinci.ai/blog/generating-professional-logos-with-nano-banana-pro",
+        "https://www.atlabs.ai/blog/the-ultimate-nano-banana-pro-prompting-guide-mastering-gemini-3-pro-image"
+      ]
+    },
+    {
+      "id": "omni-flash",
+      "display_name": "Gemini Omni Flash (Google DeepMind)",
+      "modality": "video",
+      "provider": "Google DeepMind (Gemini family)",
+      "status": "active",
+      "identification_confidence": "high",
+      "identification_notes": "\"Omni Flash\" is Google DeepMind's Gemini Omni Flash, a native-multimodal text/image/audio/video-to-video model announced at Google I/O 2026 that outputs high-resolution clips with synchronized audio in a single pass. CONFIRMED ACCESS PATH: the user generates in Google Flow, where Omni Flash is available, so no programmatic API or fal.ai fallback is required. The alternative_candidates below are kept only as reference for future scripted use.",
+      "access": {
+        "tool": "Google Flow (https://labs.google/flow) — primary surface; Omni Flash is available there. Use text-to-video, or Frames-to-Video / Ingredients to drive from the locked logo key-frame. (Also in the Gemini app; Gemini API + Vertex AI rolling out.) No fal.ai fallback needed when generating in Flow.",
+        "example_invocation": "fal MCP (fallback, available now): run(app_id: \"fal-ai/veo-3\", input: { prompt: \"<structured marketing prompt>\", image_url: \"<locked logo/key-frame URL>\", duration: \"10s\", aspect_ratio: \"9:16\" }). For Omni Flash itself today: compose in the Gemini app / Google Flow, attaching the locked brand image as a reference and iterating via conversational edits.",
+        "model_flag_or_env": "n/a (app/Flow today; Gemini API + Vertex AI rolling out). fal fallback via MCP app_id.",
+        "notes": "Omni Flash is conversational/multimodal: attach up to ~9 images, ~3 audio clips, ~3 video references in one prompt, each with an explicit role; generate a base shot, then refine across turns. Programmatically, prefer the fal MCP Veo 3 / Kling v3 endpoints (app_id + input map, queue-based) until the native Omni Flash API is GA. All Omni Flash output carries an imperceptible SynthID watermark; videos are cleared for commercial use under Google's policy."
+      },
+      "alternative_candidates": [
+        { "name": "Google Veo 3", "access": "fal.ai MCP endpoint app_id 'fal-ai/veo-3' (also Gemini API / Vertex AI). Already wired into this project's fal-ai-media skill.", "why": "Closest API-available Google sibling: text/image-to-video with generated synchronized sound, high visual quality. The practical fal fallback if the Omni Flash API isn't live yet." },
+        { "name": "Kling v3 Pro", "access": "fal.ai MCP endpoint app_id 'fal-ai/kling-video/v3/pro'. In this project's fal-ai-media skill.", "why": "Also 'omni'-style (Kling O3/3.0 Omni adds native audio, multi-shot, element referencing, voice control); strong cinematic motion and image-to-video; reliable fal access." },
+        { "name": "ByteDance Seedance 1.0 Pro", "access": "fal.ai MCP endpoint app_id 'fal-ai/seedance-1-0-pro' (text- and image-to-video).", "why": "High-motion-quality fal fallback for image-to-video from a locked key frame; no 'omni/flash' branding but battle-tested on fal." }
+      ],
+      "prompt_philosophy": "Direct it like a film director briefing a knowledgeable crew, not like a stock-footage search. It has strong real-world knowledge, so name eras/cultural/scientific references instead of over-describing, give explicit cinematic camera direction, assign every uploaded asset a precise role, and refine iteratively across turns rather than rewriting from scratch.",
+      "prompt_structure": [
+        { "block": "Goal", "purpose": "Declare video type and use context so it picks the right format/pacing.", "example": "10s vertical social hero spot for the brand launch, punchy and premium." },
+        { "block": "Input Role", "purpose": "Tell it exactly how each attached asset (logo/product image, audio, reference video) functions and what NOT to copy.", "example": "Reference Image A: use ONLY for the logo mark, matte-black product body and orange accent. Do not copy its background." },
+        { "block": "Subject + Scene", "purpose": "~20-word concrete description of subject, environment, atmosphere.", "example": "A matte-black smart speaker on a wet concrete plinth in a dim minimalist studio, faint orange rim light." },
+        { "block": "Action / Motion", "purpose": "What the subject does + how the scene breathes; modifiable mid-scene.", "example": "The speaker's light ring pulses awake; mist drifts past; product rotates a slow quarter-turn." },
+        { "block": "Camera", "purpose": "Explicit cinematic terms — never narrative. Always include one camera cue or output looks flat.", "example": "One continuous shot, slow push-in on a locked-off 35mm, ending on a centered three-quarter hero framing." },
+        { "block": "Lighting / Mood / Style", "purpose": "Set grade and look; reusable as a consistency anchor across shots.", "example": "Cinematic low-key lighting, teal-and-orange grade, shallow depth of field, premium tech-ad mood." },
+        { "block": "Text rendering", "purpose": "Declare typography, position, animation if on-screen text is needed (English/Latin best).", "example": "Lower-third tagline in clean white Inter, fades in bottom-left at second 6, synced to the beat." },
+        { "block": "Audio", "purpose": "Always state audio intent explicitly, even if 'none'.", "example": "Native synchronized audio: soft ambient hum, a single rising synth swell peaking on the light-ring wake; no voiceover." },
+        { "block": "Constraints", "purpose": "Lock what must not change; exclusions to cut revisions.", "example": "Preserve logo proportions and orange accent exactly; no extra buttons, no incorrect logos, no text other than the tagline." }
+      ],
+      "shot_and_camera_language": [
+        "one continuous shot / oner", "static / locked-off / fixed angle", "push in / punch in", "pan left / pan right", "dolly zoom", "slow overhead push-in", "quick snap zoom", "natural smartphone zoom", "vintage film camera look / grainy webcam style", "three-quarter hero framing / centered framing", "shallow depth of field, 35mm lens feel", "specify FPS/cadence for cut rhythm (e.g. ~9 frames per item at 24fps for rapid-fire montages)"
+      ],
+      "image_to_video": "Supported and ideal for a locked brand asset. Attach the finalized logo/key-frame as a reference image and assign it an explicit job, e.g. 'Reference Image A: use for the hero product shape, matte-black finish, orange accent, and centered three-quarter angle — animate from this as the opening frame; do NOT copy the background or any handwritten/sample text in the image.' Then add motion + camera that animate OUT of that frame. Pair with constraints ('preserve product proportions and logo; avoid extra ports/buttons/incorrect logos'). On the fal fallback, pass the finalized image via image_url to fal-ai/veo-3 or fal-ai/kling-video/v3/pro for first-frame-driven image-to-video.",
+      "consistency_techniques": [
+        "Write a fixed 'brand block' (exact logo description, hex-level color callouts, product finish, type face) and paste it verbatim into every shot's Input-Role + Constraints.",
+        "Use exclusion language on references ('Do not copy the background / room / sample text / color palette') so only the intended brand elements carry over.",
+        "Generate one approved base shot, then 'Lock Identity' — declare preserved traits (logo, colors, product proportions, character face/clothing) and reuse the same locked first-frame image across shots.",
+        "Refine in single-category turns (lighting, then camera, then action, then audio) so the model preserves prior structure instead of drifting.",
+        "Keep the same lighting/grade descriptor string across all clips in the campaign for a unified look.",
+        "Anchor the whole sequence on the same locked brand key-frame as the opening frame of each shot for cross-shot color/logo fidelity."
+      ],
+      "marketing_best_practices": [
+        "Lead with the locked logo/key-frame as an image-to-video first frame so brand identity is correct from frame one.",
+        "Plan for the ~10s cap: one idea per clip, hook in first 1-2s, brand/logo payoff at the end; stitch multiple 10s clips for longer ads.",
+        "Default to 9:16 for social/Shorts, 16:9 for landing-page hero, 1:1 for feed; match aspect ratio to placement.",
+        "Always direct the camera explicitly — flat, motionless output is the #1 amateur tell.",
+        "State audio intent every time (branded sting, ambient only, or silent for caption-first social).",
+        "Render critical text in post (CSS/editor) rather than relying on in-model text for crisp legibility, especially logos/legal lines.",
+        "Iterate conversationally: approve a base, then nudge lighting/pacing/action across turns instead of re-rolling.",
+        "Use audio references to land the product reveal / title on the beat ('quiet intro, stronger beat at second six, resolved ending').",
+        "Remember every output carries a SynthID watermark; videos are cleared for commercial use under Google's policy."
+      ],
+      "style_levers": [
+        "Grade/look strings reused across clips: 'teal-and-orange cinematic grade', 'low-key premium tech-ad', 'sun-drenched lifestyle', 'high-key clean studio'.",
+        "Lens/DoF feel: '35mm lens feel, shallow depth of field', 'macro detail', 'wide establishing'.",
+        "Era/reference shorthand (leverages world knowledge): name a film era, art movement, or cultural reference instead of over-describing."
+      ],
+      "banned_terms": ["Named real public figures / celebrities by proper name (blocked)", "Generating an identifiable real person's face without vocal/identity verification", "Non-Latin or thin-font on-screen text (renders unreliably — add in post)", "Speech-changing edits on real footage (currently restricted)", "Explicit, violent, dangerous, deceptive/misinformation content (Generative AI Prohibited Use Policy)"],
+      "negative_prompt_guidance": "Express exclusions as positive constraints and reference-role exclusions ('Do not copy the background / sample text / palette' on an attached image). Lock brand elements with explicit 'preserve' statements rather than 'no' clauses.",
+      "parameters": {
+        "duration": "~10 seconds per clip (longer durations promised for Pro/Ultra tiers; stitch clips for longer ads)",
+        "aspect_ratios": "Selectable; 9:16 (portrait/Shorts), 16:9 (cinematic/landing hero), 1:1 (centered/feed)",
+        "fps_or_resolution": "High-resolution output; frame cadence is directable in-prompt (e.g. 24fps montage timing). Exact res/fps caps not published in primary docs as of June 2026.",
+        "audio": "Native synchronized audio generated in the same pass (ambient, music, SFX, voice); state intent explicitly. Accepts up to ~3 audio references for rhythm/mood.",
+        "other": "Multimodal inputs: up to ~9 images, ~3 audio clips, ~3 video references per prompt; conversational multi-turn editing; mandatory imperceptible SynthID watermark; English/Latin text strongly preferred."
+      },
+      "failure_modes": [
+        "Flat, lifeless shots when no explicit camera cue is given",
+        "Garbled or misspelled on-screen text, especially thin fonts / non-Latin scripts",
+        "Drift in logo/brand fidelity across shots without a locked first frame + repeated brand block + exclusions",
+        "Inconsistency during heavy edits and in scenes with complex motion (acknowledged in the model card)",
+        "References bleeding unwanted elements (background, palette) when roles/exclusions aren't specified",
+        "Blocked or altered output when prompts touch real public-figure faces or restricted speech edits"
+      ],
+      "gold_example_prompt": "Goal: 10-second vertical (9:16) social hero spot to launch the brand's flagship matte-black smart speaker; premium, cinematic tech-ad energy. Input Role: Reference Image A is the locked brand key-frame — use it as the opening frame and the single source of truth for the logo mark, matte-black body, and orange accent ring; do NOT copy any background, reflections, or sample text from it. Scene: the speaker rests on a wet concrete plinth in a dim minimalist studio, faint volumetric mist drifting through a single orange rim light. Action/Motion: the light ring wakes and pulses gently to life as the product makes a slow quarter-turn, mist curling past it. Camera: one continuous shot, slow push-in on a locked-off 35mm, settling on a centered three-quarter hero framing. Lighting/Mood/Style: cinematic low-key lighting, teal-and-orange grade, shallow depth of field, glossy premium product-ad look. Text: lower-third tagline 'Sound, reimagined.' in clean white Inter, fades in bottom-left at second 7, synced to the beat. Audio: native synchronized audio — soft ambient room hum building into a single rising synth swell that peaks exactly as the light ring wakes; no voiceover. Constraints: preserve the logo proportions, matte-black finish, and orange accent exactly; no extra ports, buttons, or incorrect logos; no on-screen text other than the tagline; keep the same teal-and-orange grade for all sibling clips in this campaign.",
+      "sources": [
+        "https://deepmind.google/models/model-cards/gemini-omni-flash/",
+        "https://blog.google/innovation-and-ai/models-and-research/gemini-models/gemini-omni/",
+        "https://pasqualepillitteri.it/en/news/3513/mastering-gemini-omni-flash-video-prompting-guide",
+        "https://www.veo3ai.io/blog/gemini-omni-reference-image-video-audio-prompting-guide",
+        "https://fal.ai/models/fal-ai/veo-3",
+        "https://fal.ai/kling-3"
+      ]
+    }
+  ]
+}

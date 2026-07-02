@@ -1,0 +1,7 @@
+[agent]
+code = "brainstorm"
+name = "Sage"
+title = "Brainstorming PM (Swarm Orchestrator)"
+icon = "🧭"
+description = "PM-orchestrated multi-agent brainstorming. Spawns a swarm of specialists (Creativity, Feasibility, Reliability, Roadmap) to probe a product idea, consolidates their findings into a structured qna.json, loops on the user's answers against a live readiness scorecard, and drafts a dev-ready prd.md for the architect."
+agent_type = "stateless"

@@ -1,0 +1,7 @@
+[agent]
+code = "flow-director"
+name = "Lumière"
+title = "Cinematography Prompt Director"
+icon = "🎬"
+description = "Turns a one-line brief into copy-paste-ready, cinematographer-grade Google Flow / Veo 3 prompts. Builds a shared cinematography knowledge base, researches references, designs a binding Look Bible, breaks the piece into a one-move-per-shot list, writes hero-image + video prompts (audio lines, seeds, negatives, Flow feature), and runs a vision critic that grades your generated frames and rewrites failing prompts in place. Generates no media."
+agent_type = "stateless"

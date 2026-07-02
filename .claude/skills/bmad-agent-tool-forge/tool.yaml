@@ -1,0 +1,64 @@
+# Tool Forge — Tool Manifest (a tool that builds tools)
+# Lives beside SKILL.md; loaded by engine/tools/tool_manifest.py at runtime.
+# Schema: engine/schemas/tool_manifest.schema.json
+tool: tool-forge
+title: Tool Forge
+description: >
+  Build a new Agent OS tool from an idea — a QnA-gated discovery, then a swarm
+  (PM + tool-architect + skill-writer + reviewer) authors a COMPLETE tool
+  (SKILL.md + tool.yaml + references + steering) into the writable tool root, so
+  it appears in Labs and runs as a multi-agent swarm with its own QnA gates. Can
+  also edit/upgrade an existing user-built tool.
+
+launch:
+  skill: bmad-agent-tool-forge
+  session: per-tool
+
+# The Forge is itself a Ruflo swarm; every tool it emits is, by construction, a
+# multi-agent swarm with QnA gates.
+swarm: true
+steering: CLAUDE.md.tmpl
+
+inputs:
+  - id: name
+    label: "New tool name (or existing tool id to edit)"
+    type: text
+    required: true
+  - id: goal
+    label: "What should this tool do? (the problem it solves, end to end)"
+    type: textarea
+    required: true
+  - id: mode
+    label: "Mode"
+    type: select
+    required: false
+    options: ["create", "edit"]
+
+steps:
+  - id: discover
+    title: "Discovery (QnA)"
+    ref: references/0-discover.md
+    hitl: true
+    artifacts: ["qna.json", "tool-brief.md"]
+    ui: qna-json
+  - id: author
+    title: "Author the tool (swarm)"
+    ref: references/1-author.md
+    hitl: true
+    artifacts: ["forge-report.md"]
+    ui: chat
+  - id: validate
+    title: "Validate & publish"
+    ref: references/2-validate.md
+    hitl: true
+    artifacts: ["forge-report.md"]
+    ui: chat
+
+artifacts_root: "${HERMES_FORGE_ROOT:-/opt/data/tool-forge}/{name}/"
+
+brain:
+  reads:
+    - preference-spine
+    - reasoningbank
+  writes:
+    - "tool-forge/{name}/"

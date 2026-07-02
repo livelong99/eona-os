@@ -1,0 +1,112 @@
+# Flow Cinematography Prompt Director — Tool Manifest
+# Lives beside SKILL.md; loaded by engine/tools/tool_manifest.py at runtime.
+# Schema: engine/schemas/tool_manifest.schema.json
+tool: flow-director
+title: Flow Cinematography Director
+description: >
+  Turns a one-line creative brief into copy-paste-ready, cinematographer-grade
+  prompts for Google Flow / Veo 3. Generates NO media and needs no API — it
+  builds a shared cinematography knowledge base, researches real references,
+  designs a binding Look Bible, breaks the piece into a one-move-per-shot list,
+  writes hero-image + video prompts (with audio lines, seeds, negatives, and the
+  Flow feature to use), and includes a vision critic to grade your generated
+  frames against the Look Bible and rewrite failing prompts in place.
+
+launch:
+  skill: gds-agent-flow-director
+  session: per-tool
+
+# Runs as a Ruflo multi-agent swarm: Lumière (the Director) orchestrates a team
+# (Researcher, Art Director, DP/Director, Prompt Writer, Vision Critic) via Task +
+# Ruflo memory, raising qna.json to clarify with the user at any stage.
+swarm: true
+steering: CLAUDE.md.tmpl
+
+inputs:
+  - id: mode
+    label: "Mode — what are we making?"
+    type: select
+    required: true
+    options:
+      - "Brand Launch"
+      - "Product Launch"
+      - "Product Review"
+      - "Scroll Animation"
+      - "Marketing Video"
+      - "Digital Marketing Posts & Videos"
+      - "Full Faceless Channel"
+  - id: workspace
+    label: "Base it on an existing workspace (optional)"
+    type: workspace
+    required: false
+  - id: brand
+    label: "Project / title"
+    type: text
+    required: true
+  - id: brief
+    label: "One-line creative brief (the story, product, or goal)"
+    type: textarea
+    required: true
+  - id: ref_images
+    label: "Reference images — product / brand / style (analyzed first; upload the same to Flow)"
+    type: image[]
+    required: false
+
+steps:
+  - id: stage0
+    title: "Knowledge Base"
+    ref: references/0-knowledge-base.md
+    hitl: false
+    artifacts: ["knowledge-base.md"]
+    ui: chat
+
+  - id: stage1
+    title: "Reference Analysis & Intake"
+    ref: references/1-intake.md
+    hitl: true
+    artifacts: ["reference-brief.md", "intake.md"]
+    ui: qna-json
+
+  - id: stage2
+    title: "Trend & Reference Research"
+    ref: references/2-research.md
+    hitl: true
+    artifacts: ["research.md"]
+    ui: chat
+
+  - id: stage3
+    title: "Creative Direction"
+    ref: references/3-direction.md
+    hitl: true
+    artifacts: ["direction.md"]
+    ui: chat
+
+  - id: stage4
+    title: "Structure"
+    ref: references/4-structure.md
+    hitl: true
+    artifacts: ["structure.md"]
+    ui: chat
+
+  - id: stage5
+    title: "Generate Prompts"
+    ref: references/5-prompts.md
+    hitl: true
+    artifacts: ["flow-prompts.md", "flow-prompts.txt"]
+    ui: file-cards
+
+  - id: stage6
+    title: "Review"
+    ref: references/6-review.md
+    hitl: true
+    artifacts: ["review.json", "review.md"]
+    ui: custom
+
+artifacts_root: "${HERMES_VAULT_PATH:-/Users/perkypanda/Documents/Obsidian/Vault}/30_Resources/Flow/{brand}/"
+
+brain:
+  reads:
+    - preference-spine
+    - reasoningbank
+  writes:
+    - "30_Resources/Flow/{brand}/"

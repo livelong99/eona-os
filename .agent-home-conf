@@ -1,0 +1,10 @@
+{
+  "name": "Agent Home",
+  "slug": "agent-home",
+  "source": {
+    "type": "folder",
+    "ref": "/vault/10_Projects/agent-home"
+  },
+  "created": 1782551616.8808324,
+  "agent_home": true
+}

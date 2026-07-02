@@ -1,0 +1,40 @@
+# {{TOOL_TITLE}} — Tool Manifest (forged by Tool Forge)
+# Copy to `tool.yaml` in the new tool's folder and fill every {{PLACEHOLDER}}.
+# Schema: engine/schemas/tool_manifest.schema.json
+tool: {{TOOL_SLUG}}
+title: {{TOOL_TITLE}}
+description: >
+  {{ONE_PARAGRAPH_DESCRIPTION}}
+
+launch:
+  skill: {{TOOL_SLUG}}
+  session: per-tool
+
+# Every forged tool is a Ruflo multi-agent swarm with QnA gates.
+swarm: true
+steering: CLAUDE.md.tmpl
+
+inputs:
+  - id: {{PRIMARY_INPUT_ID}}      # e.g. project / subject / brand — becomes the URL slug
+    label: "{{PRIMARY_INPUT_LABEL}}"
+    type: text
+    required: true
+  # add more inputs as the brief requires (type: text|textarea|file[]|image[]|select)
+
+steps:
+  - id: stage0
+    title: "{{STAGE0_TITLE}}"
+    ref: references/0-start.md
+    hitl: true
+    artifacts: ["{{STAGE0_ARTIFACT}}"]
+    ui: qna-json            # ui hints: qna-json | artifact-iframe | file-cards | chat
+  # add one step per stage; each ref must exist under references/
+
+artifacts_root: "{{WRITABLE_ARTIFACTS_ROOT}}/{{{PRIMARY_INPUT_ID}}}/"   # e.g. ${HERMES_VAULT_PATH:-/vault}/30_Resources/{Collection}/{...}/
+
+brain:
+  reads:
+    - preference-spine
+    - reasoningbank
+  writes:
+    - "{{COLLECTION}}/{{{PRIMARY_INPUT_ID}}}/"

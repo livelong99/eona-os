@@ -1,0 +1,63 @@
+# Brainstorm → PRD (Sage, PM swarm) — Tool Manifest
+# Lives beside SKILL.md; loaded by engine/tools/tool_manifest.py at runtime.
+# Schema: engine/schemas/tool_manifest.schema.json
+tool: brainstorm
+title: Brainstorm → PRD (PM swarm)
+description: >
+  PM-orchestrated multi-agent brainstorming. A base PM agent spawns a swarm of
+  specialists — Creativity, Feasibility, Reliability, Roadmap — to probe a
+  product idea from every angle, consolidates their findings into a structured
+  qna.json of clarifying questions, loops on the user's answers against a live
+  readiness scorecard, and once every metric clears threshold drafts a refined
+  prd.md ready for the architect.
+
+launch:
+  skill: bmad-agent-brainstorm
+  session: per-tool
+
+# When true, the run is widened to allow the native Task tool + the claude-flow
+# (Ruflo) MCP server, and the session folder is provisioned with `ruflo init` +
+# a steering CLAUDE.md before the agent's first turn.
+swarm: true
+steering: CLAUDE.md.tmpl
+
+inputs:
+  - id: project
+    label: "Project / concept name"
+    type: text
+    required: true
+  - id: brief
+    label: "What's the idea?"
+    type: textarea
+    required: true
+  - id: context_docs
+    label: "Context docs (optional)"
+    type: file[]
+    required: false
+
+steps:
+  - id: clarify
+    title: "Clarify (PM swarm)"
+    ref: references/1-swarm-probe.md
+    hitl: true
+    artifacts: ["qna.json", "readiness.json"]
+    ui: qna-json
+
+  - id: prd
+    title: "Refined PRD"
+    ref: references/4-prd-draft.md
+    hitl: true
+    artifacts: ["prd.md"]
+    ui: artifact-iframe
+
+# Writable artifacts root. The Obsidian vault is mounted read-only in-container
+# (only 30_Resources/Brands is rw), so brainstorm sessions live under the rw data
+# mount. Override with HERMES_BRAINSTORM_ROOT (e.g. a rw vault subpath).
+artifacts_root: "${HERMES_BRAINSTORM_ROOT:-/opt/data/brainstorms}/{project}/"
+
+brain:
+  reads:
+    - preference-spine
+    - reasoningbank
+  writes:
+    - "brainstorms/{project}/"

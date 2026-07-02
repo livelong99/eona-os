@@ -5,7 +5,8 @@
 hermes/.env
 
 # Agent tooling / generated state (regenerable)
-.claude/
+.claude/*
+!.claude/skills
 .agent/
 _bmad/
 _bmad-output/
